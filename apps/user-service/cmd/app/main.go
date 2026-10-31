@@ -70,10 +70,12 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET /api/v1/users/me", userHandler.GetUserHandler)
 	mux.HandleFunc("POST /api/v1/users/login", userHandler.LoginUserHandler)
+	mux.HandleFunc("POST /api/v1/users/logout", userHandler.LogoutUserHandler)
 	mux.HandleFunc("POST /api/v1/users/register", userHandler.RegisterUserHandler)
 	mux.HandleFunc("GET /api/v1/auth/verify", userHandler.CheckSessionIDHandler)
-
+	mux.HandleFunc("GET /api/v1/users/search", userHandler.SearchUsersHandler)
 	wrappedMux := middleware.Logger(mux)
 	server := &http.Server{
 		Addr:    ":" + cfg.ServerPort,

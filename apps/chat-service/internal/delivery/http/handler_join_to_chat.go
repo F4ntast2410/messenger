@@ -1,6 +1,8 @@
 package handler
 
 import (
+	customErrors "chat-service/internal/errors"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -18,6 +20,21 @@ func (h *Handler) HandleJoinToChat(w http.ResponseWriter, r *http.Request) {
 	chatID, err := uuid.Parse(chatIDStr)
 	if err != nil {
 		http.Error(w, "Invalid chat_id", http.StatusBadRequest)
+		return
+	}
+	if err := h.ChatService.CheckChatType(r.Context(), chatID); err != nil {
+		if errors.Is(err, customErrors.CannotJoinDirectChat) {
+			h.Logger.Error(err.Error())
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, customErrors.ChatNotFound) {
+			h.Logger.Error(err.Error())
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		h.Logger.Error("failed to get chat_type", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	err = h.ChatService.JoinToChat(r.Context(), chatID, senderID)

@@ -14,10 +14,13 @@ type FakeChatRepository struct {
 	SaveMessageFunc           func(ctx context.Context, msg *entity.Message) error
 	GetChatMemberIDsFunc      func(ctx context.Context, chatID uuid.UUID) ([]uuid.UUID, error)
 	GetMessagesPaginatedFunc  func(ctx context.Context, chatID uuid.UUID, lastSeenID *uuid.UUID, limit int) ([]entity.Message, error)
-	CreateChatFunc            func(ctx context.Context, title string, chatType string, userID uuid.UUID) error
+	CreateChatFunc            func(ctx context.Context, title *string, chatType string, userIDs []uuid.UUID) (uuid.UUID, error)
 	JoinToChatFunc            func(ctx context.Context, chatID uuid.UUID, userID uuid.UUID) error
 	GetLastReadMessageFunc    func(ctx context.Context, userID, chatID uuid.UUID) (*uuid.UUID, error)
 	UpdateLastReadMessageFunc func(ctx context.Context, chatID, userID, messageID uuid.UUID) error
+	GetUsersChatsFunc         func(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
+	GetChatTypeFunc           func(ctx context.Context, chatID uuid.UUID) (string, error)
+	IsDirectChatExistFunc     func(ctx context.Context, userIDs []uuid.UUID) (uuid.UUID, error)
 }
 
 func (r *FakeChatRepository) GetMessagesPaginated(ctx context.Context, chatID uuid.UUID, lastSeenID *uuid.UUID, limit int) ([]entity.Message, error) {
@@ -29,8 +32,8 @@ func (r *FakeChatRepository) SaveMessage(ctx context.Context, msg *entity.Messag
 func (r *FakeChatRepository) GetChatMemberIDs(ctx context.Context, chatID uuid.UUID) ([]uuid.UUID, error) {
 	return r.GetChatMemberIDsFunc(ctx, chatID)
 }
-func (r *FakeChatRepository) CreateChat(ctx context.Context, title string, chatType string, userID uuid.UUID) error {
-	return r.CreateChatFunc(ctx, title, chatType, userID)
+func (r *FakeChatRepository) CreateChat(ctx context.Context, title *string, chatType string, userIDs []uuid.UUID) (uuid.UUID, error) {
+	return r.CreateChatFunc(ctx, title, chatType, userIDs)
 }
 func (r *FakeChatRepository) JoinToChat(ctx context.Context, chatID uuid.UUID, userID uuid.UUID) error {
 	return r.JoinToChatFunc(ctx, chatID, userID)
@@ -40,6 +43,15 @@ func (r *FakeChatRepository) GetLastReadMessage(ctx context.Context, userID, cha
 }
 func (r *FakeChatRepository) UpdateLastReadMessage(ctx context.Context, chatID, userID, messageID uuid.UUID) error {
 	return r.UpdateLastReadMessageFunc(ctx, chatID, userID, messageID)
+}
+func (r *FakeChatRepository) GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error) {
+	return r.GetUsersChatsFunc(ctx, userID)
+}
+func (r *FakeChatRepository) GetChatType(ctx context.Context, chatID uuid.UUID) (string, error) {
+	return r.GetChatTypeFunc(ctx, chatID)
+}
+func (r *FakeChatRepository) IsDirectChatExist(ctx context.Context, userIDs []uuid.UUID) (uuid.UUID, error) {
+	return r.IsDirectChatExistFunc(ctx, userIDs)
 }
 
 var _ ChatRepository = (*FakeChatRepository)(nil)

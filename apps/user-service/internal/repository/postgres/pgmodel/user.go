@@ -1,6 +1,7 @@
 package pgmodel
 
 import (
+	"time"
 	"user-service/internal/entity"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ type User struct {
 	Username     string    `db:"username"`
 	Email        string    `db:"email"`
 	PasswordHash string    `db:"password_hash"`
+	CreatedAt    time.Time `db:"created_at"`
 }
 
 func (u *User) ToEntity() *entity.User {
@@ -21,5 +23,6 @@ func (u *User) ToEntity() *entity.User {
 		Username:     u.Username,
 		Email:        u.Email,
 		PasswordHash: u.PasswordHash,
+		CreatedAt:    u.CreatedAt,
 	}
 }

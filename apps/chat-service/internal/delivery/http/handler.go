@@ -10,10 +10,12 @@ import (
 
 type ChatService interface {
 	JoinToChat(ctx context.Context, chatID uuid.UUID, userID uuid.UUID) error
-	CreateChat(ctx context.Context, chatType string, title string, userID uuid.UUID) error
+	CreateChat(ctx context.Context, chatType string, title *string, userID uuid.UUID, userIDs []uuid.UUID) (uuid.UUID, error)
 	SendMessage(ctx context.Context, chatID, senderID uuid.UUID, content string) (*entity.Message, error)
 	GetMessagesPaginated(ctx context.Context, chatID uuid.UUID, lastSeenID *uuid.UUID, limit int) ([]entity.Message, error)
 	UpdateLastReadMessage(ctx context.Context, chatID, userID, messageID uuid.UUID) error
+	GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
+	CheckChatType(ctx context.Context, chatID uuid.UUID) error
 }
 
 type Handler struct {

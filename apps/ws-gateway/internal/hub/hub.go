@@ -9,11 +9,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const sendBufferSize = 32
+
+type Client struct {
+	conn   *websocket.Conn
+	userID uuid.UUID
+	send   chan []byte
+}
+
 type Hub struct {
 	mu        sync.RWMutex
-	conns     map[uuid.UUID]*websocket.Conn
-	userChats map[uuid.UUID]map[uuid.UUID]bool // userID -> set of chatIDs
-	chatUsers map[uuid.UUID]map[uuid.UUID]bool // chatID -> set of userIDs
+	clients   map[uuid.UUID]*Client
+	userChats map[uuid.UUID]map[uuid.UUID]bool
+	chatUsers map[uuid.UUID]map[uuid.UUID]bool
 
 	OnFirstChatUserJoined func(chatID uuid.UUID)
 	OnLastChatUserLeft    func(chatID uuid.UUID)
@@ -21,36 +29,48 @@ type Hub struct {
 
 func New(onSub, onUnsub func(chatID uuid.UUID)) *Hub {
 	return &Hub{
-		conns:                 make(map[uuid.UUID]*websocket.Conn),
+		clients:               make(map[uuid.UUID]*Client),
 		userChats:             make(map[uuid.UUID]map[uuid.UUID]bool),
 		chatUsers:             make(map[uuid.UUID]map[uuid.UUID]bool),
 		OnFirstChatUserJoined: onSub,
 		OnLastChatUserLeft:    onUnsub,
 	}
 }
+func (c *Client) Conn() *websocket.Conn { return c.conn }
+func (c *Client) Send() chan []byte     { return c.send }
+func (c *Client) UserID() uuid.UUID     { return c.userID }
+func (h *Hub) IsUserInChat(userID, chatID uuid.UUID) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.userChats[userID][chatID]
+}
 
-func (h *Hub) Register(userID uuid.UUID, conn *websocket.Conn, activeChatIDs []uuid.UUID) {
+// Register создаёт нового Client и возвращает его — вызывающий код (HandleConnect)
+// использует возвращённый *Client, чтобы запустить его readPump/writePump.
+func (h *Hub) Register(userID uuid.UUID, conn *websocket.Conn, activeChatIDs []uuid.UUID) *Client {
 	h.mu.Lock()
 
-	if old, ok := h.conns[userID]; ok {
-		old.Close()
+	if old, ok := h.clients[userID]; ok {
+		old.conn.Close() // старое соединение больше не нужно — новое его заменяет
 	}
-	h.conns[userID] = conn
+
+	client := &Client{
+		conn:   conn,
+		userID: userID,
+		send:   make(chan []byte, sendBufferSize),
+	}
+	h.clients[userID] = client
 
 	if _, exists := h.userChats[userID]; !exists {
 		h.userChats[userID] = make(map[uuid.UUID]bool)
 	}
 
 	chatsToSubscribe := make([]uuid.UUID, 0)
-
 	for _, chatID := range activeChatIDs {
 		h.userChats[userID][chatID] = true
-
 		if _, exists := h.chatUsers[chatID]; !exists {
 			h.chatUsers[chatID] = make(map[uuid.UUID]bool)
 		}
-
-		// Если это первый пользователь данного чата на ЭТОМ инстансе ws-gateway
 		if len(h.chatUsers[chatID]) == 0 {
 			chatsToSubscribe = append(chatsToSubscribe, chatID)
 		}
@@ -59,33 +79,38 @@ func (h *Hub) Register(userID uuid.UUID, conn *websocket.Conn, activeChatIDs []u
 
 	h.mu.Unlock()
 
-	// Вызываем внешние коллбеки для оформления подписок в Redis вне блокировки мьютекса
 	if h.OnFirstChatUserJoined != nil {
 		for _, chatID := range chatsToSubscribe {
 			h.OnFirstChatUserJoined(chatID)
 		}
 	}
+
+	return client
 }
 
-func (h *Hub) Unregister(userID uuid.UUID) {
+func (h *Hub) Unregister(client *Client) {
 	h.mu.Lock()
 
-	delete(h.conns, userID)
+	if c, ok := h.clients[client.userID]; ok && client == c {
+		close(c.send)
+		delete(h.clients, client.userID)
+	} else {
+		h.mu.Unlock()
+		return
+	}
 
 	chatsToUnsubscribe := make([]uuid.UUID, 0)
-
-	if chats, ok := h.userChats[userID]; ok {
+	if chats, ok := h.userChats[client.userID]; ok {
 		for chatID := range chats {
 			if users, ok := h.chatUsers[chatID]; ok {
-				delete(users, userID)
-				// Если в чате не осталось ни одного подключенного пользователя на этом инстансе
+				delete(users, client.userID)
 				if len(users) == 0 {
 					delete(h.chatUsers, chatID)
 					chatsToUnsubscribe = append(chatsToUnsubscribe, chatID)
 				}
 			}
 		}
-		delete(h.userChats, userID)
+		delete(h.userChats, client.userID)
 	}
 
 	h.mu.Unlock()
@@ -97,7 +122,6 @@ func (h *Hub) Unregister(userID uuid.UUID) {
 	}
 }
 
-// BroadcastToChat рассылает полученное из Redis событие всем онлайн-участникам чата на данном инстансе
 func (h *Hub) BroadcastToChat(chatID uuid.UUID, payload any, excludeUserID uuid.UUID) {
 	h.mu.RLock()
 	userSet, exists := h.chatUsers[chatID]
@@ -106,17 +130,13 @@ func (h *Hub) BroadcastToChat(chatID uuid.UUID, payload any, excludeUserID uuid.
 		return
 	}
 
-	// Собираем список соединений для отправки
-	targets := make([]*websocket.Conn, 0, len(userSet))
-	targetIDs := make([]uuid.UUID, 0, len(userSet))
-
+	targets := make([]*Client, 0, len(userSet))
 	for uID := range userSet {
 		if uID == excludeUserID {
-			continue // Не отправляем инициатору события
+			continue
 		}
-		if conn, ok := h.conns[uID]; ok {
-			targets = append(targets, conn)
-			targetIDs = append(targetIDs, uID)
+		if client, ok := h.clients[uID]; ok {
+			targets = append(targets, client)
 		}
 	}
 	h.mu.RUnlock()
@@ -127,13 +147,12 @@ func (h *Hub) BroadcastToChat(chatID uuid.UUID, payload any, excludeUserID uuid.
 		return
 	}
 
-	for i, conn := range targets {
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			slog.Warn("failed to write to socket, dropping connection",
-				slog.String("user_id", targetIDs[i].String()),
-				slog.String("error", err.Error()),
-			)
-			h.Unregister(targetIDs[i])
+	for _, client := range targets {
+		select {
+		case client.send <- data:
+		default:
+			slog.Warn("client send buffer full, dropping connection", slog.String("user_id", client.userID.String()))
+			h.Unregister(client)
 		}
 	}
 }

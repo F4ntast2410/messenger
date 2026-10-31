@@ -3,6 +3,7 @@ package handler
 import (
 	"chat-service/internal/delivery/http/dto"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -31,14 +32,15 @@ func (h *Handler) HandleGetMessagesPaginated(w http.ResponseWriter, r *http.Requ
 	if beforeIDStr != "" {
 		parsedUUID, err := uuid.Parse(beforeIDStr)
 		if err != nil {
-			http.Error(w, "невалидный формат before_id", http.StatusBadRequest)
+			http.Error(w, "Невалидный формат before_id", http.StatusBadRequest)
 			return
 		}
 		beforeID = &parsedUUID
 	}
 	messages, err := h.ChatService.GetMessagesPaginated(r.Context(), chatID, beforeID, limit)
 	if err != nil {
-		http.Error(w, "failed to get messages", http.StatusInternalServerError)
+		h.Logger.Error("failed to get messages", slog.String("error", err.Error()))
+		http.Error(w, "Не удалось получить сообщения", http.StatusInternalServerError)
 		return
 	}
 	messagesResponse := make([]dto.MessageResponse, len(messages))

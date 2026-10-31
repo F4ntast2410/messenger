@@ -12,3 +12,13 @@ type Chat struct {
 	Title     *string
 	CreatedAt time.Time
 }
+
+type ChatSummary struct {
+	ChatID           uuid.UUID
+	ChatTitle        *string
+	ChatType         string
+	MessageText      *string
+	MessageSentAt    *time.Time
+	MessageUpdatedAt *time.Time
+	UnReadCount      int
+}

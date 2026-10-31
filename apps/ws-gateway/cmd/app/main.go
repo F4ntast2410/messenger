@@ -48,7 +48,7 @@ func main() {
 	manager.SetHub(h)
 
 	// 4. HTTP / WebSocket сервер
-	wsHandler := ws.NewHandler(h)
+	wsHandler := ws.NewHandler(h, ps)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/ws", wsHandler.HandleConnect)
 

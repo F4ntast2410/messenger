@@ -79,6 +79,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/chats", h.HandleCreateChat)
 	mux.HandleFunc("POST /api/v1/chats/{id}", h.HandleJoinToChat)
 	mux.HandleFunc("PUT /api/v1/chats/{id}/read", h.HandleUpdateLastReadMessageID)
+	mux.HandleFunc("GET /api/v1/chats", h.HandleGetUserChats)
 
 	wrappedMux := middleware.Logger(mux)
 	server := &http.Server{

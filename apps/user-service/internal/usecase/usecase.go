@@ -25,6 +25,8 @@ func NewUsecase(authRepo AuthRepository, userRepo UserRepository) *UsecaseImpl {
 
 type UserRepository interface {
 	RegisterUser(ctx context.Context, email string, username string, passwordHash string, name string) error
-	UserExists(ctx context.Context, email string) (bool, error)
-	GetUser(ctx context.Context, email string) (*entity.User, error)
+	UserExists(ctx context.Context, email, username string) (bool, error)
+	GetUserByEmail(ctx context.Context, email string) (*entity.User, error)
+	SearchUsers(ctx context.Context, query string, cursor *string, limit int, excludeUserID uuid.UUID) ([]entity.User, error)
+	GetUserByID(ctx context.Context, userID uuid.UUID) (*entity.User, error)
 }

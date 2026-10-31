@@ -1,6 +1,10 @@
 package entity
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type LoginResult struct {
 	Required2FA  bool
@@ -13,4 +17,5 @@ type User struct {
 	Username     string
 	Email        string
 	PasswordHash string
+	CreatedAt    time.Time
 }

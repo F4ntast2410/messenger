@@ -48,6 +48,9 @@ func (uc *UsecaseImpl) CreateSession(ctx context.Context, userID uuid.UUID) (str
 	if err := uc.AuthRepo.SaveSessionToken(ctx, tokenHash, userID, 24*time.Hour); err != nil {
 		return "", err
 	}
-	// err = uc.UserRepo.CreateSession(ctx, userID, tokenHash)
 	return rawToken, err
+}
+
+func (uc *UsecaseImpl) DeleteSession(ctx context.Context, sessionToken string) error {
+	return uc.AuthRepo.DeleteSessionToken(ctx, sessionToken)
 }

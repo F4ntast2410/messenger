@@ -17,3 +17,7 @@ type ChatEvent struct {
 	Payload   any       `json:"payload"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+type TypeEvent struct {
+	Type EventType `json:"type"`
+}

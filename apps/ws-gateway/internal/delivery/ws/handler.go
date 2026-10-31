@@ -1,9 +1,14 @@
 package ws
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"messenger/pkg/pubsub"
 	"net/http"
 	"strings"
+	"time"
 
 	"ws-gateway/internal/hub"
 
@@ -12,21 +17,25 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	// В проде тут нужна нормальная проверка Origin,
-	// пока разрешаем всё, т.к. за nginx.
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+const (
+	pongWait   = 60 * time.Second
+	pingPeriod = (pongWait * 9) / 10
+	writeWait  = 10 * time.Second
+)
+
 type Handler struct {
 	hub *hub.Hub
+	ps  *pubsub.PubSub
 }
 
-func NewHandler(h *hub.Hub) *Handler {
-	return &Handler{hub: h}
+func NewHandler(h *hub.Hub, ps *pubsub.PubSub) *Handler {
+	return &Handler{hub: h, ps: ps}
 }
 
 func (h *Handler) HandleConnect(w http.ResponseWriter, r *http.Request) {
-	// 1. Извлекаем ID пользователя из заголовка, подставленного Nginx
 	userIDStr := r.Header.Get("X-User-ID")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
@@ -34,7 +43,6 @@ func (h *Handler) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Извлекаем список ID чатов из query-параметров (?chat_ids=uuid1,uuid2)
 	var activeChatIDs []uuid.UUID
 	if chatIDsParam := r.URL.Query().Get("chat_ids"); chatIDsParam != "" {
 		rawIDs := strings.Split(chatIDsParam, ",")
@@ -45,38 +53,106 @@ func (h *Handler) HandleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Апгрейдим HTTP-соединение до WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("ws upgrade failed", slog.String("error", err.Error()))
 		return
 	}
 
-	// 4. Регистрируем пользователя и его чаты в Hub
-	// Внутри Hub проверит, есть ли среди activeChatIDs новые чаты для этого инстанса,
-	// и автоматически вызовет менеджер подписок Redis.
-	h.hub.Register(userID, conn, activeChatIDs)
+	client := h.hub.Register(userID, conn, activeChatIDs)
 	slog.Info("user connected",
 		slog.String("user_id", userID.String()),
 		slog.Int("active_chats_count", len(activeChatIDs)),
 	)
 
-	// 5. Запускаем фоновую горутину для прослушивания закрытия сокета
-	go h.readLoop(userID, conn)
+	go h.writePump(client)
+	go h.readPump(client)
 }
 
-func (h *Handler) readLoop(userID uuid.UUID, conn *websocket.Conn) {
+func (h *Handler) writePump(client *hub.Client) {
+	ticker := time.NewTicker(pingPeriod)
 	defer func() {
-		h.hub.Unregister(userID)
-		conn.Close()
-		slog.Info("user disconnected", slog.String("user_id", userID.String()))
+		ticker.Stop()
+		client.Conn().Close()
 	}()
 
 	for {
-		// Читающий цикл нужен, чтобы вовремя узнать о закрытии соединения
-		// (клиент сам не пишет нам ничего, кроме pong/close).
-		if _, _, err := conn.ReadMessage(); err != nil {
+		select {
+		case data, ok := <-client.Send():
+			client.Conn().SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+
+				client.Conn().WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			if err := client.Conn().WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+
+		case <-ticker.C:
+			client.Conn().SetWriteDeadline(time.Now().Add(writeWait))
+			if err := client.Conn().WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (h *Handler) readPump(client *hub.Client) {
+	defer func() {
+		h.hub.Unregister(client)
+		slog.Info("user disconnected", slog.String("user_id", client.UserID().String()))
+	}()
+
+	conn := client.Conn()
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			slog.Warn("failed to read message with ws", slog.String("error", err.Error()))
 			return
 		}
+
+		var eventType pubsub.TypeEvent
+		if err := json.Unmarshal(data, &eventType); err != nil {
+			slog.Warn("failed to unmarshal data to event type", slog.String("error", err.Error()))
+			continue
+		}
+
+		switch eventType.Type {
+		case pubsub.EventUserTyping:
+			h.handleTyping(client, data)
+		}
+	}
+}
+
+func (h *Handler) handleTyping(client *hub.Client, data []byte) {
+	var event pubsub.ChatEvent
+	event.CreatedAt = time.Now()
+	if err := json.Unmarshal(data, &event); err != nil {
+		slog.Warn("failed to unmarshal data to userTypingEvent", slog.String("error", err.Error()))
+		return
+	}
+
+	chatID, err := uuid.Parse(event.ChatID)
+	if err != nil {
+		slog.Warn("failed to parse chat_id to uuid from string", slog.String("error", err.Error()))
+		return
+	}
+
+	if !h.hub.IsUserInChat(client.UserID(), chatID) {
+		slog.Warn("user hasn't chat with id", slog.String("chat_id", event.ChatID))
+		return
+	}
+
+	event.SenderID = client.UserID().String()
+	channel := fmt.Sprintf("chat:%s", event.ChatID)
+	if err := h.ps.Publish(context.Background(), channel, event); err != nil {
+		slog.Error("failed to publish event", slog.String("error", err.Error()))
 	}
 }

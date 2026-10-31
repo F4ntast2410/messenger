@@ -8,7 +8,7 @@ import (
 )
 
 func (uc *UsecaseImpl) RegisterUser(ctx context.Context, email string, username string, name string, password string) error {
-	exists, err := uc.UserRepo.UserExists(ctx, email)
+	exists, err := uc.UserRepo.UserExists(ctx, email, username)
 	if err != nil {
 		return err
 	}

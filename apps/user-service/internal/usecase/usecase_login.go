@@ -9,13 +9,13 @@ import (
 )
 
 func (uc *UsecaseImpl) LoginUser(ctx context.Context, email string, password string) (*entity.LoginResult, error) {
-	user, err := uc.UserRepo.GetUser(ctx, email)
+	user, err := uc.UserRepo.GetUserByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
 	if err != nil {
-		return nil, customErrors.ErrInvalidPassword
+		return nil, customErrors.ErrInvalidEmailOrPassword
 	}
 	sessionID, err := uc.CreateSession(ctx, user.ID)
 	if err != nil {
