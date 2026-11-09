@@ -76,6 +76,9 @@ func main() {
 	mux.HandleFunc("POST /api/v1/users/register", userHandler.RegisterUserHandler)
 	mux.HandleFunc("GET /api/v1/auth/verify", userHandler.CheckSessionIDHandler)
 	mux.HandleFunc("GET /api/v1/users/search", userHandler.SearchUsersHandler)
+	mux.HandleFunc("GET /api/v1/users/{id}", userHandler.GetUserByIDHandler)
+	mux.HandleFunc("POST /api/v1/users/batch", userHandler.GetUsersByIDsHandler)
+
 	wrappedMux := middleware.Logger(mux)
 	server := &http.Server{
 		Addr:    ":" + cfg.ServerPort,

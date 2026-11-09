@@ -14,6 +14,7 @@ type ChatSummary struct {
 	MessageText      *string    `db:"content"`
 	MessageSentAt    *time.Time `db:"created_at"`
 	MessageUpdatedAt *time.Time `db:"updated_at"`
+	MessageSenderID  *uuid.UUID `db:"sender_id"`
 	UnReadCount      int        `db:"cnt"`
 }
 type ChatType struct {
@@ -28,6 +29,7 @@ func (c ChatSummary) ToEntity() *entity.ChatSummary {
 		MessageText:      c.MessageText,
 		MessageSentAt:    c.MessageSentAt,
 		MessageUpdatedAt: c.MessageUpdatedAt,
+		MessageSenderID:  c.MessageSenderID,
 		UnReadCount:      c.UnReadCount,
 	}
 }

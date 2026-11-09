@@ -8,7 +8,8 @@ import (
 )
 
 type SendMessageRequest struct {
-	Content string `json:"content"`
+	Content   string     `json:"content"`
+	ReplyToID *uuid.UUID `json:"reply_to_id"`
 }
 
 type MessageResponse struct {

@@ -2,8 +2,8 @@ export interface User {
   id: string;
   name: string;
   username: string;
-  email: string;
-  created_at: string;
+  email: string | null;
+  created_at: string | null;
 }
 
 export interface ChatListItem {
@@ -13,6 +13,7 @@ export interface ChatListItem {
   msg_text: string | null;
   msg_sent_at: string | null;
   msg_updated_at: string | null;
+  msg_sender_id: string | null;
   unread_msg_cnt: number;
 }
 
@@ -31,4 +32,17 @@ export interface Message {
   updated_at: string | null;
   reply_to_id: string | null;
   is_deleted: boolean;
+}
+
+export type EventType = 'NEW_MESSAGE' | 'USER_TYPING' | 'MESSAGE_READ';
+
+export interface ChatEvent {
+    type: EventType;
+    chat_id: string;
+    sender_id: string;
+    payload: unknown;
+    created_at: string;
+}
+export interface MessageReadPayload {
+    message_id: string;
 }

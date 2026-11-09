@@ -22,7 +22,9 @@ type RegisterRequest struct {
 type ErrorResponse struct {
 	Error string
 }
-
+type GetUserByIDsRequest struct {
+	UserIDs []uuid.UUID `json:"user_ids"`
+}
 type SearchUsersResponse struct {
 	Name     string    `json:"name"`
 	Username string    `json:"username"`

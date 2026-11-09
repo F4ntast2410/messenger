@@ -9,17 +9,17 @@ import (
 )
 
 func (s *PostgresStorage) GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error) {
-	query := `SELECT last_msg.content, last_msg.created_at, last_msg.updated_at, cm.chat_id, c.title, c.type, msg_cnt.cnt 
+	query := `SELECT last_msg.content, last_msg.created_at, last_msg.updated_at, last_msg.sender_id, cm.chat_id, c.title, c.type, msg_cnt.cnt
 	FROM chat_members cm 
 	LEFT JOIN LATERAL 
-	(SELECT m.content, m.created_at, m.updated_at 
+	(SELECT m.content, m.created_at, m.updated_at, m.sender_id
 	FROM messages m 
 	WHERE m.chat_id = cm.chat_id 
 	ORDER BY m.created_at DESC 
 	LIMIT 1) last_msg ON true 
 	JOIN chats c ON c.id = cm.chat_id 
 	JOIN LATERAL 
-	(SELECT COUNT(m.id) AS cnt 
+	(SELECT COUNT(m.id) AS cnt
 	FROM messages m 
 	WHERE m.chat_id = cm.chat_id AND (cm.last_read_message_id IS NULL OR m.id > cm.last_read_message_id)) msg_cnt ON true 
 	WHERE cm.user_id = $1

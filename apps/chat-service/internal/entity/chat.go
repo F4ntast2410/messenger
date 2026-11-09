@@ -20,5 +20,6 @@ type ChatSummary struct {
 	MessageText      *string
 	MessageSentAt    *time.Time
 	MessageUpdatedAt *time.Time
+	MessageSenderID  *uuid.UUID
 	UnReadCount      int
 }

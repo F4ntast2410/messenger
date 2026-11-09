@@ -31,7 +31,7 @@ func (h *Handler) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, err := h.ChatService.SendMessage(r.Context(), chatID, senderID, req.Content)
+	msg, err := h.ChatService.SendMessage(r.Context(), chatID, senderID, req.ReplyToID, req.Content)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -39,5 +39,5 @@ func (h *Handler) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(msg)
+	json.NewEncoder(w).Encode(dto.ToResponse(msg))
 }

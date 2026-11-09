@@ -11,7 +11,7 @@ import (
 
 func (h *Handler) HandleUpdateLastReadMessageID(w http.ResponseWriter, r *http.Request) {
 	userIDStr := r.Header.Get("X-User-ID")
-	senderID, err := uuid.Parse(userIDStr)
+	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -28,7 +28,12 @@ func (h *Handler) HandleUpdateLastReadMessageID(w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	err = h.ChatService.UpdateLastReadMessage(r.Context(), chatID, senderID, req.MessageID)
+	if req.MessageID == uuid.Nil {
+		h.Logger.Warn("recieved nil message_id in update_last_read_msg")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	err = h.ChatService.UpdateLastReadMessage(r.Context(), chatID, userID, req.MessageID)
 	if err != nil {
 		h.Logger.Error("failed to update last read message id", slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusInternalServerError)

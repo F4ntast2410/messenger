@@ -14,13 +14,13 @@ import sys
 # ── Настройки ────────────────────────────────────────────────────────────────
 
 # Расширения файлов, которые включаем
-INCLUDE_EXTENSIONS = {".go", ".mod", ".sum", ".sql", ".yaml", ".yml", ".env.example", ".Dockerfile", "Dockerfile", ".html", ".js", ".css", ".conf"}
+INCLUDE_EXTENSIONS = {".go", ".mod", ".sum", ".sql", ".yaml", ".yml", ".env.example", ".Dockerfile", "Dockerfile", ".html", ".js", ".css", ".conf", ".tsx", ".ts"}
 
 # Папки, которые полностью пропускаем
 SKIP_DIRS = {".git", ".idea", ".vscode", "vendor", "node_modules", "__pycache__"}
 
 # Файлы, которые пропускаем
-SKIP_FILES = {"repo.txt", "repo_to_txt.py"}
+SKIP_FILES = {"repo.txt", "repo_to_txt.py", ".env"}
 
 # Максимальный размер одного файла (байт). Большие файлы будут обрезаны.
 MAX_FILE_SIZE = 100_000

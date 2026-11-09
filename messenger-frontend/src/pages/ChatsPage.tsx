@@ -1,12 +1,56 @@
-import { useEffect, useState } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Outlet } from "react-router-dom";
 import { getChats } from "../api/chats";
-import type { ChatListItem } from "../api/types";
+import type { ChatListItem, Message } from "../api/types";
+import { WebSocketProvider } from "../context/WebSocketContext";
+import { ChatSideBarView } from "../components/ChatSideBar";
+import { applyMessage } from "../utils/chats";
+import { getUsersByIDs } from "../api/users";
+import type { User } from "../api/types";
 
 export function ChatsPage() {
     const [chats, setChats] = useState<ChatListItem[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [usersById, setUsersById] = useState<Record<string, User>>({});
+    const requestedUserIDs = useRef(new Set<string>());
+    function onMessageSent(msg: Message) {
+        setChats((prev) => applyMessage(prev, msg, false));
+    }
+    useEffect(() => {
+        const userIDs = [
+            ...new Set(
+                chats
+                    .map((chat) => chat.msg_sender_id)
+                    .filter((id): id is string => id !== null)
+            ),
+        ];
+
+        const missingIDs = userIDs.filter(
+            (id) => !requestedUserIDs.current.has(id)
+        );
+
+        if (missingIDs.length === 0) return;
+
+        missingIDs.forEach((id) => requestedUserIDs.current.add(id));
+
+        getUsersByIDs(missingIDs)
+            .then((users) => {
+                setUsersById((prev) => {
+                    const updated = { ...prev };
+
+                    users.forEach((user) => {
+                        updated[user.id] = user;
+                    });
+
+                    return updated;
+                });
+            })
+            .catch((err) => {
+                missingIDs.forEach((id) => requestedUserIDs.current.delete(id));
+                console.error("Ошибка при загрузке пользователей:", err);
+            });
+    }, [chats]);
     useEffect(() => {
         (async () => {
             setIsLoading(true);
@@ -24,24 +68,19 @@ export function ChatsPage() {
     }, [])
     return (
         <div style={{ display: "flex", height: "100vh" }}>
-            <aside style={{ width: 300, borderRight: "1px solid #ccc", overflowY: "auto" }}>
-                {isLoading && <p>Загрузка...</p>}
-                {error && <p>{error}</p>}
-                {!isLoading && !error && chats.length === 0 && <p>Чатов пока нет</p>}
+            <WebSocketProvider chatIds={chats.map((c) => c.chat_id)}>
+                <ChatSideBarView
+                    chats={chats}
+                    setChats={setChats}
+                    isLoading={isLoading}
+                    error={error}
+                    usersById={usersById}
+                />
 
-                {chats.map((chat) => (
-                    <Link key={chat.chat_id} to={`/chats/${chat.chat_id}`}
-                        style={{ display: "block", padding: 12, textDecoration: "none", color: "inherit" }}>
-                        <strong>{chat.chat_title ?? "Личный чат"}</strong>
-                        <div>{chat.msg_text ?? "Сообщений пока нет"}</div>
-                        {chat.unread_msg_cnt > 0 && <span>{chat.unread_msg_cnt}</span>}
-                    </Link>
-                ))}
-            </aside>
-
-            <main style={{ flex: 1 }}>
-                <Outlet />
-            </main>
+                <main style={{ flex: 1 }}>
+                    <Outlet context={{ onMessageSent }} />
+                </main>
+            </WebSocketProvider>
         </div>
     );
 }

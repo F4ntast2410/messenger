@@ -14,6 +14,7 @@ type Usecase interface {
 	RegisterUser(ctx context.Context, email string, username string, name string, password string) error
 	SearchUsers(ctx context.Context, query string, cursor *string, limit int, excludeUserID uuid.UUID) ([]entity.User, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*entity.User, error)
+	GetUsersByIDs(ctx context.Context, userIDs []uuid.UUID) ([]*entity.User, error)
 	DeleteSession(ctx context.Context, sessionToken string) error
 }
 type UserHandler struct {

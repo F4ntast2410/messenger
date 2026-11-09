@@ -22,6 +22,7 @@ type ChatListItemResponse struct {
 	MessageText      *string    `json:"msg_text"`
 	MessageSentAt    *time.Time `json:"msg_sent_at"`
 	MessageUpdatedAt *time.Time `json:"msg_updated_at"`
+	MessageSenderID  *uuid.UUID `json:"msg_sender_id"`
 	UnReadCount      int        `json:"unread_msg_cnt"`
 }
 
@@ -33,6 +34,7 @@ func ToDTOChatList(c *entity.ChatSummary) *ChatListItemResponse {
 		MessageText:      c.MessageText,
 		MessageSentAt:    c.MessageSentAt,
 		MessageUpdatedAt: c.MessageUpdatedAt,
+		MessageSenderID:  c.MessageSenderID,
 		UnReadCount:      c.UnReadCount,
 	}
 }
