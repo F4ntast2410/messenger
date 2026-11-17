@@ -4,7 +4,7 @@ import { getChats } from "../api/chats";
 import type { ChatListItem, Message } from "../api/types";
 import { WebSocketProvider } from "../context/WebSocketContext";
 import { ChatSideBarView } from "../components/ChatSideBar";
-import { applyMessage } from "../utils/chats";
+import { applyMessage, isNewerMessage } from "../utils/chats";
 import { getUsersByIDs } from "../api/users";
 import type { User } from "../api/types";
 
@@ -16,6 +16,22 @@ export function ChatsPage() {
     const requestedUserIDs = useRef(new Set<string>());
     function onMessageSent(msg: Message) {
         setChats((prev) => applyMessage(prev, msg, false));
+    }
+    function onMessageRead(messageId: string, chatId: string) {
+        setChats((prev) => {
+            const chat = prev.find((c) => c.chat_id === chatId);
+            if (!chat) {return prev;}
+
+            if (chat.msg_id && !isNewerMessage(chat.msg_id, messageId)) {
+                    const updated: ChatListItem = {
+                    ...chat,
+                    unread_msg_cnt: 0,
+                };
+
+                return [updated, ...prev.filter((c) => c.chat_id !== chat.chat_id)];
+            }
+            return prev;
+        });
     }
     useEffect(() => {
         const userIDs = [
@@ -78,7 +94,7 @@ export function ChatsPage() {
                 />
 
                 <main style={{ flex: 1 }}>
-                    <Outlet context={{ onMessageSent }} />
+                    <Outlet context={{ onMessageSent, onMessageRead }} />
                 </main>
             </WebSocketProvider>
         </div>

@@ -19,6 +19,7 @@ type ChatRepository interface {
 	GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
 	IsDirectChatExist(ctx context.Context, userIDs []uuid.UUID) (uuid.UUID, error)
 	GetChatType(ctx context.Context, chatID uuid.UUID) (string, error)
+	GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error)
 }
 
 type ChatService struct {

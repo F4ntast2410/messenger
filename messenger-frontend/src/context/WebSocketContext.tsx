@@ -17,7 +17,7 @@ interface WebSocketContextValue {
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 
 export function WebSocketProvider({ chatIds, children }: { chatIds: string[]; children: ReactNode }) {
-    const chatIdsKey = chatIds.join(",");
+    const chatIdsKey = [...chatIds].sort().join(",");
     const socketRef = useRef<WebSocket | null>(null);
     const handlersRef = useRef<Set<Handler>>(new Set());
 
@@ -30,13 +30,27 @@ export function WebSocketProvider({ chatIds, children }: { chatIds: string[]; ch
             const protocol = location.protocol === "https:" ? "wss" : "ws";
             const ws = new WebSocket(`${protocol}://${location.host}/api/v1/ws?chat_ids=${chatIdsKey}`);
             socketRef.current = ws;
-
             ws.onmessage = (e) => {
                 const event: ChatEvent = JSON.parse(e.data);
                 handlersRef.current.forEach((handler) => handler(event));
             };
+            ws.onopen = () => {
+                console.log("WS OPEN", chatIdsKey);
+            };
 
-            ws.onclose = () => {
+            ws.onerror = (event) => {
+                console.error("WS ERROR", event);
+            };
+
+            ws.onclose = (event) => {
+                console.log("WS CLOSE", {
+                    code: event.code,
+                    reason: event.reason,
+                    wasClean: event.wasClean,
+                    chatIdsKey,
+                    closedByUs,
+                });
+
                 if (closedByUs) return;
                 retryTimer = window.setTimeout(connect, 2000);
             };

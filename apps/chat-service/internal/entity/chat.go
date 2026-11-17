@@ -14,12 +14,14 @@ type Chat struct {
 }
 
 type ChatSummary struct {
-	ChatID           uuid.UUID
-	ChatTitle        *string
-	ChatType         string
-	MessageText      *string
-	MessageSentAt    *time.Time
-	MessageUpdatedAt *time.Time
-	MessageSenderID  *uuid.UUID
-	UnReadCount      int
+	ChatID            uuid.UUID
+	ChatTitle         *string
+	ChatType          string
+	MessageText       *string
+	MessageSentAt     *time.Time
+	MessageUpdatedAt  *time.Time
+	MessageSenderID   *uuid.UUID
+	MessageID         *uuid.UUID
+	LastReadMessageID *uuid.UUID
+	UnReadCount       int
 }

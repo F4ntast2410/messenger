@@ -4,6 +4,7 @@ export interface User {
   username: string;
   email: string | null;
   created_at: string | null;
+  last_read_message_id: string | null;
 }
 
 export interface ChatListItem {
@@ -15,6 +16,8 @@ export interface ChatListItem {
   msg_updated_at: string | null;
   msg_sender_id: string | null;
   unread_msg_cnt: number;
+  msg_id: string | null;
+  last_read_message_id: string | null;
 }
 
 export interface SearchUserResult {
@@ -37,12 +40,17 @@ export interface Message {
 export type EventType = 'NEW_MESSAGE' | 'USER_TYPING' | 'MESSAGE_READ';
 
 export interface ChatEvent {
-    type: EventType;
-    chat_id: string;
-    sender_id: string;
-    payload: unknown;
-    created_at: string;
+  type: EventType;
+  chat_id: string;
+  sender_id: string;
+  payload: unknown;
+  created_at: string;
 }
 export interface MessageReadPayload {
-    message_id: string;
+  message_id: string;
+}
+
+export interface ChatMember {
+  user_id: string;
+  last_read_message_id: string | null;
 }

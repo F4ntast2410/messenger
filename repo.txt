@@ -19,6 +19,7 @@
     │   │   │   │       │   └── logger.go
     │   │   │   │       ├── handler.go
     │   │   │   │       ├── handler_create_chat.go
+    │   │   │   │       ├── handler_get_chat_members.go
     │   │   │   │       ├── handler_get_messages.go
     │   │   │   │       ├── handler_get_user_chats.go
     │   │   │   │       ├── handler_join_to_chat.go
@@ -26,6 +27,7 @@
     │   │   │   │       └── handler_update_last_read_message_id.go
     │   │   │   ├── entity
     │   │   │   │   ├── chat.go
+    │   │   │   │   ├── chat_member.go
     │   │   │   │   └── message.go
     │   │   │   ├── errors
     │   │   │   │   └── chat.go
@@ -39,6 +41,7 @@
     │   │   │   │       ├── repository_check_affected.go
     │   │   │   │       ├── repository_check_existing.go
     │   │   │   │       ├── repository_create_chat.go
+    │   │   │   │       ├── repository_get_chat_members.go
     │   │   │   │       ├── repository_get_chat_members_id.go
     │   │   │   │       ├── repository_get_chats.go
     │   │   │   │       ├── repository_get_last_read_message.go
@@ -50,6 +53,7 @@
     │   │   │       ├── chat_service_test.go
     │   │   │       ├── usecase.go
     │   │   │       ├── usecase_create_chat.go
+    │   │   │       ├── usecase_get_chat_members.go
     │   │   │       ├── usecase_get_message.go
     │   │   │       ├── usecase_get_user_chats.go
     │   │   │       ├── usecase_join_to_chat.go
@@ -134,7 +138,8 @@
     │   │   │   ├── auth.ts
     │   │   │   ├── chats.ts
     │   │   │   ├── client.ts
-    │   │   │   └── types.ts
+    │   │   │   ├── types.ts
+    │   │   │   └── users.ts
     │   │   ├── components
     │   │   │   ├── ChatListItemView.tsx
     │   │   │   ├── ChatSideBar.tsx
@@ -705,6 +710,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/chats/{id}", h.HandleJoinToChat)
 	mux.HandleFunc("PUT /api/v1/chats/{id}/read", h.HandleUpdateLastReadMessageID)
 	mux.HandleFunc("GET /api/v1/chats", h.HandleGetUserChats)
+	mux.HandleFunc("GET /api/v1/chats/{id}/members", h.HandleGetChatMembers)
 
 	wrappedMux := middleware.Logger(mux)
 	server := &http.Server{
@@ -825,11 +831,12 @@ import (
 type ChatService interface {
 	JoinToChat(ctx context.Context, chatID uuid.UUID, userID uuid.UUID) error
 	CreateChat(ctx context.Context, chatType string, title *string, userID uuid.UUID, userIDs []uuid.UUID) (uuid.UUID, error)
-	SendMessage(ctx context.Context, chatID, senderID uuid.UUID, content string) (*entity.Message, error)
+	SendMessage(ctx context.Context, chatID, senderID uuid.UUID, replyID *uuid.UUID, content string) (*entity.Message, error)
 	GetMessagesPaginated(ctx context.Context, chatID uuid.UUID, lastSeenID *uuid.UUID, limit int) ([]entity.Message, error)
 	UpdateLastReadMessage(ctx context.Context, chatID, userID, messageID uuid.UUID) error
 	GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
 	CheckChatType(ctx context.Context, chatID uuid.UUID) error
+	GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error)
 }
 
 type Handler struct {
@@ -894,6 +901,70 @@ func (h *Handler) HandleCreateChat(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(resp)
+}
+
+```
+
+---
+
+## File: apps\chat-service\internal\delivery\http\handler_get_chat_members.go
+
+```
+package handler
+
+import (
+	"chat-service/internal/delivery/http/dto"
+	customErrors "chat-service/internal/errors"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+
+	"github.com/google/uuid"
+)
+
+func (h *Handler) HandleGetChatMembers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	chatIDStr := r.PathValue("id")
+	chatID, err := uuid.Parse(chatIDStr)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(dto.ErrorResponse{
+			Error: "Invalid chat ID",
+		})
+		return
+	}
+	requestorIDStr := r.Header.Get("X-User-ID")
+	requestorID, err := uuid.Parse(requestorIDStr)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	chatMembers, err := h.ChatService.GetChatMembers(r.Context(), chatID, requestorID)
+	if err != nil {
+		if errors.Is(err, customErrors.NoPermission) {
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Requestor does not have permission to view users list in this chat"})
+			return
+		} else if errors.Is(err, customErrors.ChatNotFound) {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Chat not found"})
+			return
+		} else if errors.Is(err, customErrors.NoUsersInChat) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]dto.ChatMemberResponse{})
+			return
+		}
+		h.Logger.Error("failed to get chat_members (get_chat_members)", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	var dtoChatMembers []dto.ChatMemberResponse
+	for _, m := range chatMembers {
+		dtoChatMembers = append(dtoChatMembers, *dto.ToDTOChatMember(&m))
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(dtoChatMembers)
 }
 
 ```
@@ -1092,7 +1163,7 @@ func (h *Handler) HandleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, err := h.ChatService.SendMessage(r.Context(), chatID, senderID, req.Content)
+	msg, err := h.ChatService.SendMessage(r.Context(), chatID, senderID, req.ReplyToID, req.Content)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -1123,7 +1194,7 @@ import (
 
 func (h *Handler) HandleUpdateLastReadMessageID(w http.ResponseWriter, r *http.Request) {
 	userIDStr := r.Header.Get("X-User-ID")
-	senderID, err := uuid.Parse(userIDStr)
+	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -1140,7 +1211,12 @@ func (h *Handler) HandleUpdateLastReadMessageID(w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	err = h.ChatService.UpdateLastReadMessage(r.Context(), chatID, senderID, req.MessageID)
+	if req.MessageID == uuid.Nil {
+		h.Logger.Warn("recieved nil message_id in update_last_read_msg")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	err = h.ChatService.UpdateLastReadMessage(r.Context(), chatID, userID, req.MessageID)
 	if err != nil {
 		h.Logger.Error("failed to update last read message id", slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusInternalServerError)
@@ -1174,24 +1250,44 @@ type CreateChatResponse struct {
 	ChatID uuid.UUID `json:"chat_id"`
 }
 type ChatListItemResponse struct {
-	ChatID           uuid.UUID  `json:"chat_id"`
-	ChatTitle        *string    `json:"chat_title"`
-	ChatType         string     `json:"chat_type"`
-	MessageText      *string    `json:"msg_text"`
-	MessageSentAt    *time.Time `json:"msg_sent_at"`
-	MessageUpdatedAt *time.Time `json:"msg_updated_at"`
-	UnReadCount      int        `json:"unread_msg_cnt"`
+	ChatID            uuid.UUID  `json:"chat_id"`
+	ChatTitle         *string    `json:"chat_title"`
+	ChatType          string     `json:"chat_type"`
+	MessageText       *string    `json:"msg_text"`
+	MessageSentAt     *time.Time `json:"msg_sent_at"`
+	MessageUpdatedAt  *time.Time `json:"msg_updated_at"`
+	MessageSenderID   *uuid.UUID `json:"msg_sender_id"`
+	MessageID         *uuid.UUID `json:"msg_id"`
+	LastReadMessageID *uuid.UUID `json:"last_read_message_id"`
+	UnReadCount       int        `json:"unread_msg_cnt"`
+}
+type ChatMemberResponse struct {
+	UserID            uuid.UUID  `json:"user_id"`
+	LastReadMessageID *uuid.UUID `json:"last_read_message_id"`
+}
+type ErrorResponse struct {
+	Error string
+}
+
+func ToDTOChatMember(m *entity.ChatMember) *ChatMemberResponse {
+	return &ChatMemberResponse{
+		UserID:            *m.UserID,
+		LastReadMessageID: m.LastReadMessageID,
+	}
 }
 
 func ToDTOChatList(c *entity.ChatSummary) *ChatListItemResponse {
 	return &ChatListItemResponse{
-		ChatID:           c.ChatID,
-		ChatTitle:        c.ChatTitle,
-		ChatType:         c.ChatType,
-		MessageText:      c.MessageText,
-		MessageSentAt:    c.MessageSentAt,
-		MessageUpdatedAt: c.MessageUpdatedAt,
-		UnReadCount:      c.UnReadCount,
+		ChatID:            c.ChatID,
+		ChatTitle:         c.ChatTitle,
+		ChatType:          c.ChatType,
+		MessageText:       c.MessageText,
+		MessageSentAt:     c.MessageSentAt,
+		MessageUpdatedAt:  c.MessageUpdatedAt,
+		MessageSenderID:   c.MessageSenderID,
+		MessageID:         c.MessageID,
+		LastReadMessageID: c.LastReadMessageID,
+		UnReadCount:       c.UnReadCount,
 	}
 }
 
@@ -1212,7 +1308,8 @@ import (
 )
 
 type SendMessageRequest struct {
-	Content string `json:"content"`
+	Content   string     `json:"content"`
+	ReplyToID *uuid.UUID `json:"reply_to_id"`
 }
 
 type MessageResponse struct {
@@ -1319,13 +1416,39 @@ type Chat struct {
 }
 
 type ChatSummary struct {
-	ChatID           uuid.UUID
-	ChatTitle        *string
-	ChatType         string
-	MessageText      *string
-	MessageSentAt    *time.Time
-	MessageUpdatedAt *time.Time
-	UnReadCount      int
+	ChatID            uuid.UUID
+	ChatTitle         *string
+	ChatType          string
+	MessageText       *string
+	MessageSentAt     *time.Time
+	MessageUpdatedAt  *time.Time
+	MessageSenderID   *uuid.UUID
+	MessageID         *uuid.UUID
+	LastReadMessageID *uuid.UUID
+	UnReadCount       int
+}
+
+```
+
+---
+
+## File: apps\chat-service\internal\entity\chat_member.go
+
+```
+package entity
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type ChatMember struct {
+	ChatID            uuid.UUID
+	UserID            *uuid.UUID
+	JoinedAt          *time.Time
+	LastReadMessageID *uuid.UUID
+	RequestorInChat   bool
 }
 
 ```
@@ -1372,6 +1495,10 @@ var IncorrectChatType = errors.New("incorrect chat type")
 var CannotJoinDirectChat = errors.New("cannot join to direct chat")
 
 var ChatNotFound = errors.New("chat not found")
+
+var NoPermission = errors.New("requestor does not have a permission")
+
+var NoUsersInChat = errors.New("no users in chat")
 
 ```
 
@@ -1491,6 +1618,37 @@ func (s *PostgresStorage) CreateChat(ctx context.Context, title *string, chatTyp
 
 ---
 
+## File: apps\chat-service\internal\repository\postgres\repository_get_chat_members.go
+
+```
+package repository
+
+import (
+	"chat-service/internal/entity"
+	"chat-service/internal/repository/postgres/pgmodel"
+	"context"
+
+	"github.com/google/uuid"
+)
+
+func (s *PostgresStorage) GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error) {
+	query := `SELECT cm.user_id, cm.last_read_message_id, EXISTS(SELECT 1 FROM chat_members rq WHERE rq.chat_id = $1 AND rq.user_id = $2) AS req_in_chat FROM chats c LEFT JOIN chat_members cm ON c.id = cm.chat_id WHERE c.id = $1`
+	var chatMembers []pgmodel.ChatMember
+	if err := s.DB.SelectContext(ctx, &chatMembers, query, chatID, requestorID); err != nil {
+		return nil, err
+	}
+	var entityChatMembers []entity.ChatMember
+	for _, m := range chatMembers {
+		entityChatMembers = append(entityChatMembers, *pgmodel.ToEntityChatMember(&m))
+	}
+	return entityChatMembers, nil
+
+}
+
+```
+
+---
+
 ## File: apps\chat-service\internal\repository\postgres\repository_get_chat_members_id.go
 
 ```
@@ -1530,19 +1688,32 @@ import (
 )
 
 func (s *PostgresStorage) GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error) {
-	query := `SELECT last_msg.content, last_msg.created_at, last_msg.updated_at, cm.chat_id, c.title, c.type, msg_cnt.cnt 
+	query := `SELECT last_msg.content, last_msg.created_at, last_msg.updated_at, last_msg.sender_id, last_msg.id, cm.chat_id, c.title, c.type, msg_cnt.cnt, read_cursor.last_read_message_id
 	FROM chat_members cm 
 	LEFT JOIN LATERAL 
-	(SELECT m.content, m.created_at, m.updated_at 
-	FROM messages m 
-	WHERE m.chat_id = cm.chat_id 
-	ORDER BY m.created_at DESC 
-	LIMIT 1) last_msg ON true 
+	(
+		SELECT m.content, m.created_at, m.updated_at, m.sender_id, m.id
+		FROM messages m 
+		WHERE m.chat_id = cm.chat_id 
+		ORDER BY m.created_at DESC 
+		LIMIT 1
+	) last_msg ON true 
 	JOIN chats c ON c.id = cm.chat_id 
 	JOIN LATERAL 
-	(SELECT COUNT(m.id) AS cnt 
-	FROM messages m 
-	WHERE m.chat_id = cm.chat_id AND (cm.last_read_message_id IS NULL OR m.id > cm.last_read_message_id)) msg_cnt ON true 
+	(
+		SELECT COUNT(m.id) AS cnt
+		FROM messages m 
+		WHERE m.chat_id = cm.chat_id AND (cm.last_read_message_id IS NULL OR m.id > cm.last_read_message_id) AND m.sender_id <> cm.user_id
+	) msg_cnt ON true
+	LEFT JOIN LATERAL (
+		SELECT cm2.last_read_message_id
+		FROM chat_members cm2
+		WHERE cm2.chat_id = cm.chat_id
+		AND cm2.user_id <> cm.user_id
+		AND cm2.last_read_message_id IS NOT NULL
+		ORDER BY cm2.last_read_message_id DESC
+		LIMIT 1
+	) read_cursor ON true 
 	WHERE cm.user_id = $1
 	ORDER BY last_msg.created_at DESC NULLS LAST`
 	chatSummary := make([]pgmodel.ChatSummary, 0, 16)
@@ -1609,7 +1780,7 @@ func (s *PostgresStorage) GetMessagesPaginated(ctx context.Context, chatID uuid.
 	if lastSeenID == nil {
 		// Первичная загрузка чата (самые свежие сообщения)
 		query = `
-			SELECT id, chat_id, sender_id, content, created_at 
+			SELECT id, chat_id, sender_id, content, created_at
 			FROM messages 
 			WHERE chat_id = $1 AND is_deleted = FALSE 
 			ORDER BY id DESC LIMIT $2`
@@ -1617,7 +1788,7 @@ func (s *PostgresStorage) GetMessagesPaginated(ctx context.Context, chatID uuid.
 	} else {
 		// Подгрузка старых сообщений при скролле вверх (id < last_seen_id)
 		query = `
-			SELECT id, chat_id, sender_id, content, created_at 
+			SELECT id, chat_id, sender_id, content, created_at
 			FROM messages 
 			WHERE chat_id = $1 AND id < $2 AND is_deleted = FALSE 
 			ORDER BY id DESC LIMIT $3`
@@ -1694,10 +1865,10 @@ import (
 
 func (s *PostgresStorage) SaveMessage(ctx context.Context, msg *entity.Message) error {
 	query := `
-		INSERT INTO messages (id, chat_id, sender_id, content, created_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO messages (id, chat_id, sender_id, content, created_at, reply_to_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`
-	_, err := s.DB.ExecContext(ctx, query, msg.ID, msg.ChatID, msg.SenderID, msg.Content, msg.CreatedAt)
+	_, err := s.DB.ExecContext(ctx, query, msg.ID, msg.ChatID, msg.SenderID, msg.Content, msg.CreatedAt, msg.ReplyToID)
 	return err
 }
 
@@ -1717,13 +1888,24 @@ import (
 )
 
 func (s *PostgresStorage) UpdateLastReadMessage(ctx context.Context, chatID, userID, messageID uuid.UUID) error {
-	query := `UPDATE chat_members SET last_read_message_id = $1 WHERE chat_id = $2 AND user_id = $3`
-
-	// Используем ExecContext, так как нам не нужно сканировать возвращаемые строки
-	result, err := s.DB.ExecContext(ctx, query, chatID, userID, messageID)
+	query := `UPDATE chat_members cm
+	SET last_read_message_id = m.id
+	FROM messages m
+	WHERE m.id = $1
+	AND m.chat_id = $2
+	AND cm.chat_id = $2
+	AND cm.user_id = $3;`
+	result, err := s.DB.ExecContext(
+		ctx,
+		query,
+		messageID,
+		chatID,
+		userID,
+	)
 	if err != nil {
 		return err
 	}
+
 	return checkAffected(result, "chat member not found")
 }
 
@@ -1744,13 +1926,16 @@ import (
 )
 
 type ChatSummary struct {
-	ChatID           uuid.UUID  `db:"chat_id"`
-	ChatTitle        *string    `db:"title"`
-	ChatType         string     `db:"type"`
-	MessageText      *string    `db:"content"`
-	MessageSentAt    *time.Time `db:"created_at"`
-	MessageUpdatedAt *time.Time `db:"updated_at"`
-	UnReadCount      int        `db:"cnt"`
+	ChatID            uuid.UUID  `db:"chat_id"`
+	ChatTitle         *string    `db:"title"`
+	ChatType          string     `db:"type"`
+	MessageText       *string    `db:"content"`
+	MessageSentAt     *time.Time `db:"created_at"`
+	MessageUpdatedAt  *time.Time `db:"updated_at"`
+	MessageSenderID   *uuid.UUID `db:"sender_id"`
+	MessageID         *uuid.UUID `db:"id"`
+	LastReadMessageID *uuid.UUID `db:"last_read_message_id"`
+	UnReadCount       int        `db:"cnt"`
 }
 type ChatType struct {
 	ChatType string `db:"type"`
@@ -1758,13 +1943,16 @@ type ChatType struct {
 
 func (c ChatSummary) ToEntity() *entity.ChatSummary {
 	return &entity.ChatSummary{
-		ChatID:           c.ChatID,
-		ChatTitle:        c.ChatTitle,
-		ChatType:         c.ChatType,
-		MessageText:      c.MessageText,
-		MessageSentAt:    c.MessageSentAt,
-		MessageUpdatedAt: c.MessageUpdatedAt,
-		UnReadCount:      c.UnReadCount,
+		ChatID:            c.ChatID,
+		ChatTitle:         c.ChatTitle,
+		ChatType:          c.ChatType,
+		MessageText:       c.MessageText,
+		MessageSentAt:     c.MessageSentAt,
+		MessageUpdatedAt:  c.MessageUpdatedAt,
+		MessageSenderID:   c.MessageSenderID,
+		MessageID:         c.MessageID,
+		LastReadMessageID: c.LastReadMessageID,
+		UnReadCount:       c.UnReadCount,
 	}
 }
 
@@ -1778,6 +1966,7 @@ func (c ChatSummary) ToEntity() *entity.ChatSummary {
 package pgmodel
 
 import (
+	"chat-service/internal/entity"
 	"time"
 
 	"github.com/google/uuid"
@@ -1785,9 +1974,20 @@ import (
 
 type ChatMember struct {
 	ChatID            uuid.UUID  `db:"chat_id"`
-	UserID            uuid.UUID  `db:"user_id"`
-	JoinedAt          time.Time  `db:"joined_at"`
+	UserID            *uuid.UUID `db:"user_id"`
+	JoinedAt          *time.Time `db:"joined_at"`
 	LastReadMessageID *uuid.UUID `db:"last_read_message_id"`
+	RequestorInChat   bool       `db:"req_in_chat"`
+}
+
+func ToEntityChatMember(m *ChatMember) *entity.ChatMember {
+	return &entity.ChatMember{
+		ChatID:            m.ChatID,
+		UserID:            m.UserID,
+		JoinedAt:          m.JoinedAt,
+		LastReadMessageID: m.LastReadMessageID,
+		RequestorInChat:   m.RequestorInChat,
+	}
 }
 
 ```
@@ -1860,6 +2060,7 @@ type FakeChatRepository struct {
 	GetUsersChatsFunc         func(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
 	GetChatTypeFunc           func(ctx context.Context, chatID uuid.UUID) (string, error)
 	IsDirectChatExistFunc     func(ctx context.Context, userIDs []uuid.UUID) (uuid.UUID, error)
+	GetChatMembersFunc        func(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error)
 }
 
 func (r *FakeChatRepository) GetMessagesPaginated(ctx context.Context, chatID uuid.UUID, lastSeenID *uuid.UUID, limit int) ([]entity.Message, error) {
@@ -1936,6 +2137,10 @@ func TestChatService_GetMessagesPaginated_Success(t *testing.T) {
 	}
 }
 
+func (r *FakeChatRepository) GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error) {
+	return r.GetChatMembersFunc(ctx, chatID, requestorID)
+}
+
 ```
 
 ---
@@ -1964,6 +2169,7 @@ type ChatRepository interface {
 	GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
 	IsDirectChatExist(ctx context.Context, userIDs []uuid.UUID) (uuid.UUID, error)
 	GetChatType(ctx context.Context, chatID uuid.UUID) (string, error)
+	GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error)
 }
 
 type ChatService struct {
@@ -2011,6 +2217,39 @@ func (s *ChatService) CreateChat(ctx context.Context, chatType string, title *st
 	default:
 		return uuid.Nil, customErrors.IncorrectChatType
 	}
+}
+
+```
+
+---
+
+## File: apps\chat-service\internal\usecase\usecase_get_chat_members.go
+
+```
+package usecase
+
+import (
+	"chat-service/internal/entity"
+	customErrors "chat-service/internal/errors"
+	"context"
+
+	"github.com/google/uuid"
+)
+
+func (s *ChatService) GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error) {
+	chatMembers, err := s.repo.GetChatMembers(ctx, chatID, requestorID)
+	if err != nil {
+		return nil, err
+	}
+	if len(chatMembers) == 0 {
+		return nil, customErrors.ChatNotFound
+	} else if !chatMembers[0].RequestorInChat {
+		if chatMembers[0].UserID == nil {
+			return nil, customErrors.NoUsersInChat
+		}
+		return nil, customErrors.NoPermission
+	}
+	return chatMembers, nil
 }
 
 ```
@@ -2120,19 +2359,19 @@ func ToPayload(m *entity.Message) pubsub.MessagePayload {
 		CreatedAt: m.CreatedAt,
 	}
 }
-func (s *ChatService) SendMessage(ctx context.Context, chatID, senderID uuid.UUID, content string) (*entity.Message, error) {
+func (s *ChatService) SendMessage(ctx context.Context, chatID, senderID uuid.UUID, replyID *uuid.UUID, content string) (*entity.Message, error) {
 	// 1. Генерируем UUIDv7 (или используем uuid.NewV7())
 	msgID, err := uuid.NewV7()
 	if err != nil {
 		return nil, err
 	}
-
 	msg := &entity.Message{
 		ID:        msgID,
 		ChatID:    chatID,
 		SenderID:  senderID,
 		Content:   content,
 		CreatedAt: time.Now(),
+		ReplyToID: replyID,
 	}
 
 	// 2. Атомарно сохраняем в БД
@@ -2494,6 +2733,9 @@ func main() {
 	mux.HandleFunc("POST /api/v1/users/register", userHandler.RegisterUserHandler)
 	mux.HandleFunc("GET /api/v1/auth/verify", userHandler.CheckSessionIDHandler)
 	mux.HandleFunc("GET /api/v1/users/search", userHandler.SearchUsersHandler)
+	mux.HandleFunc("GET /api/v1/users/{id}", userHandler.GetUserByIDHandler)
+	mux.HandleFunc("POST /api/v1/users/batch", userHandler.GetUsersByIDsHandler)
+
 	wrappedMux := middleware.Logger(mux)
 	server := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
@@ -2655,6 +2897,55 @@ func (h *UserHandler) GetUserHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(meResponse)
+}
+
+func (h *UserHandler) GetUserByIDHandler(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.PathValue("id")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		h.Logger.Warn("failed to parse user_id from query to uuid", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	user, err := h.UC.GetUserByID(r.Context(), userID)
+	if err != nil {
+		h.Logger.Error("failed to get user by id",
+			slog.String("error", err.Error()),
+		)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	dtoUser := dto.ToDTOSearchResult(user)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(dtoUser)
+
+}
+
+func (h *UserHandler) GetUsersByIDsHandler(w http.ResponseWriter, r *http.Request) {
+	var req dto.GetUserByIDsRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		h.Logger.Warn("failed to decode user_ids", slog.String("error", err.Error()))
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	users, err := h.UC.GetUsersByIDs(r.Context(), req.UserIDs)
+	if err != nil {
+		h.Logger.Error("failed to get users by ids",
+			slog.String("error", err.Error()),
+		)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	var dtoUsers []dto.SearchUsersResponse
+	for _, u := range users {
+		dtoUsers = append(dtoUsers, *dto.ToDTOSearchResult(u))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(dtoUsers)
+
 }
 
 ```
@@ -2856,6 +3147,7 @@ type Usecase interface {
 	RegisterUser(ctx context.Context, email string, username string, name string, password string) error
 	SearchUsers(ctx context.Context, query string, cursor *string, limit int, excludeUserID uuid.UUID) ([]entity.User, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*entity.User, error)
+	GetUsersByIDs(ctx context.Context, userIDs []uuid.UUID) ([]*entity.User, error)
 	DeleteSession(ctx context.Context, sessionToken string) error
 }
 type UserHandler struct {
@@ -2901,7 +3193,9 @@ type RegisterRequest struct {
 type ErrorResponse struct {
 	Error string
 }
-
+type GetUserByIDsRequest struct {
+	UserIDs []uuid.UUID `json:"user_ids"`
+}
 type SearchUsersResponse struct {
 	Name     string    `json:"name"`
 	Username string    `json:"username"`
@@ -3109,6 +3403,7 @@ import (
 	"user-service/internal/repository/postgres/pgmodel"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 )
 
 func (s *PostgresStorage) GetUserByEmail(ctx context.Context, email string) (*entity.User, error) {
@@ -3132,6 +3427,38 @@ func (s *PostgresStorage) GetUserByID(ctx context.Context, userID uuid.UUID) (*e
 		return nil, err
 	}
 	return user.ToEntity(), nil
+}
+
+func (s *PostgresStorage) GetUsersByIDs(ctx context.Context, userIDs []uuid.UUID) ([]*entity.User, error) {
+	if len(userIDs) == 0 {
+		return []*entity.User{}, nil
+	}
+
+	query := `
+        SELECT id, email, username, name, created_at
+        FROM users
+        WHERE id IN (?)
+    `
+
+	query, args, err := sqlx.In(query, userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	query = s.DB.Rebind(query)
+
+	var users []pgmodel.User
+	err = s.DB.SelectContext(ctx, &users, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*entity.User, 0, len(users))
+	for _, user := range users {
+		result = append(result, user.ToEntity())
+	}
+
+	return result, nil
 }
 
 ```
@@ -3331,6 +3658,7 @@ type UserRepository interface {
 	GetUserByEmail(ctx context.Context, email string) (*entity.User, error)
 	SearchUsers(ctx context.Context, query string, cursor *string, limit int, excludeUserID uuid.UUID) ([]entity.User, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*entity.User, error)
+	GetUsersByIDs(ctx context.Context, userIDs []uuid.UUID) ([]*entity.User, error)
 }
 
 ```
@@ -3351,6 +3679,10 @@ import (
 
 func (uc *UsecaseImpl) GetUserByID(ctx context.Context, userID uuid.UUID) (*entity.User, error) {
 	return uc.UserRepo.GetUserByID(ctx, userID)
+}
+
+func (uc *UsecaseImpl) GetUsersByIDs(ctx context.Context, userIDs []uuid.UUID) ([]*entity.User, error) {
+	return uc.UserRepo.GetUsersByIDs(ctx, userIDs)
 }
 
 ```
@@ -4345,7 +4677,7 @@ export function getMe(): Promise<User> {
 
 ```
 import { request } from "./client";
-import type { ChatListItem, Message } from "./types";
+import type { ChatListItem, ChatMember, Message } from "./types";
 
 
 
@@ -4361,11 +4693,27 @@ export function getMessages(chatId: string, limit = 30, beforeId?: string): Prom
     return request<Message[]>(`/chats/${chatId}/messages?${params}`);
 }
 
-export function sendMessage(content: string, chatId: string): Promise<Message> {
-  return request(`/chats/${chatId}/messages`, {
+export function sendMessage(content: string, chatId: string, replyToId?: string): Promise<Message> {
+  return request<Message>(`/chats/${chatId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, reply_to_id: replyToId }),
   });
+}
+
+export function markMessagesAsRead(
+    chatId: string,
+    messageId: string
+): Promise<void> {
+    return request<void>(`/chats/${chatId}/read`, {
+        method: 'PUT',
+        body: JSON.stringify({
+            message_id: messageId,
+        }),
+    });
+}
+
+export function getChatMembers(chatId: string): Promise<ChatMember[]>{
+    return request<ChatMember[]>(`/chats/${chatId}/members`);
 }
 ```
 
@@ -4416,8 +4764,9 @@ export interface User {
   id: string;
   name: string;
   username: string;
-  email: string;
-  created_at: string;
+  email: string | null;
+  created_at: string | null;
+  last_read_message_id: string | null;
 }
 
 export interface ChatListItem {
@@ -4427,7 +4776,10 @@ export interface ChatListItem {
   msg_text: string | null;
   msg_sent_at: string | null;
   msg_updated_at: string | null;
+  msg_sender_id: string | null;
   unread_msg_cnt: number;
+  msg_id: string | null;
+  last_read_message_id: string | null;
 }
 
 export interface SearchUserResult {
@@ -4447,15 +4799,43 @@ export interface Message {
   is_deleted: boolean;
 }
 
-export type EventType = 'NEW_MESSAGE' | 'USER_TYPING' | 'MESSAGE-READ';
+export type EventType = 'NEW_MESSAGE' | 'USER_TYPING' | 'MESSAGE_READ';
 
 export interface ChatEvent {
-    type: EventType;
-    chat_id: string;
-    sender_id: string;
-    payload: unknown;
-    created_at: string;
+  type: EventType;
+  chat_id: string;
+  sender_id: string;
+  payload: unknown;
+  created_at: string;
 }
+export interface MessageReadPayload {
+  message_id: string;
+}
+
+export interface ChatMember {
+  user_id: string;
+  last_read_message_id: string | null;
+}
+```
+
+---
+
+## File: messenger-frontend\src\api\users.ts
+
+```
+import { request } from "./client";
+import type { User } from "./types";
+
+export function getUserById(userId: string): Promise<User> {
+  return request<User>(`/users/${userId}`)
+}
+
+export function getUsersByIDs(userIDs: string[]): Promise<User[]> {
+  return request<User[]>('/users/batch', {
+    method: 'POST',
+    body: JSON.stringify({ user_ids: userIDs }),
+  });
+} 
 ```
 
 ---
@@ -4464,18 +4844,37 @@ export interface ChatEvent {
 
 ```
 import { Link } from "react-router-dom";
-import type { ChatListItem } from "../api/types";
+import type { ChatListItem, User } from "../api/types";
 
 interface ChatListItemProps {
     chat: ChatListItem;
+    usersById: Record<string, User>;
+    userId: string | undefined;
 }
 
-export function ChatListItemView({ chat }: ChatListItemProps) {
+export function ChatListItemView({ chat, usersById, userId }: ChatListItemProps) {
+
     return (
         <Link to={`/chats/${chat.chat_id}`}
               style={{ display: "block", padding: 12, textDecoration: "none", color: "inherit" }}>
             <strong>{chat.chat_title ?? "Личный чат"}</strong>
             <div>{chat.msg_text ?? "Сообщений пока нет"}</div>
+            {chat.msg_sender_id === userId &&
+                chat.msg_id &&
+                chat.last_read_message_id &&
+                (chat.last_read_message_id >= chat.msg_id) && (
+                    <span style={{
+                        color: "#2697E8",
+                        fontSize: 12
+                    }}>
+                        ✓✓
+                    </span>
+                )}
+            {chat.msg_sender_id && (
+                <div>
+                    {usersById[chat.msg_sender_id]?.name ?? "Загрузка пользователя..."}
+                </div>
+            )}
             {chat.unread_msg_cnt > 0 && <span>{chat.unread_msg_cnt}</span>}
         </Link>
     );
@@ -4488,7 +4887,7 @@ export function ChatListItemView({ chat }: ChatListItemProps) {
 
 ```
 import { useEffect, type Dispatch, type SetStateAction } from "react";
-import type { ChatListItem, Message } from "../api/types";
+import type { ChatListItem, Message, MessageReadPayload, User } from "../api/types";
 import { ChatListItemView } from "./ChatListItemView";
 import { useSocket } from "../context/WebSocketContext";
 import { useParams } from "react-router-dom";
@@ -4501,18 +4900,40 @@ interface ChatSideBarProps {
     setChats: Dispatch<SetStateAction<ChatListItem[]>>;
     isLoading: boolean;
     error: string | null;
+    usersById: Record<string, User>;
 }
 
-export function ChatSideBarView({chats, setChats, isLoading, error}: ChatSideBarProps) {
+export function ChatSideBarView({chats, setChats, isLoading, error, usersById}: ChatSideBarProps) {
     const { subscribe } = useSocket();
     const { chatId } = useParams();
     const { user } = useAuth();
     useEffect(() => {
     return subscribe((event) => {
-        if (event.type !== "NEW_MESSAGE") return;
-        const msg = event.payload as Message;
-        const isUnread = event.chat_id !== chatId && event.sender_id !== user?.id;
-        setChats((prev) => applyMessage(prev, msg, isUnread));
+        if (event.type === "NEW_MESSAGE") {
+            const msg = event.payload as Message;
+            const isUnread = event.sender_id !== user?.id;
+            setChats((prev) => applyMessage(prev, msg, isUnread));
+            return;
+        }
+        if (event.type === "MESSAGE_READ") {
+            const payload = event.payload as MessageReadPayload;
+            const msgId = payload.message_id;
+            const senderId = event.sender_id;
+            if (senderId !== user?.id) {
+                setChats((prev) => {
+                    const existing = prev.find((c) => c.chat_id === event.chat_id);
+                    if (!existing) return prev;
+                    if (existing.last_read_message_id && existing.last_read_message_id >= msgId) return prev;
+                    const updated: ChatListItem = {
+                        ...existing,
+                        last_read_message_id: msgId,
+                    };
+
+                    return [updated, ...prev.filter((c) => c.chat_id !== event.chat_id)];
+                });
+                return;
+            }
+        } 
     });
 }, [subscribe, chatId, user?.id]);
     return (
@@ -4522,7 +4943,7 @@ export function ChatSideBarView({chats, setChats, isLoading, error}: ChatSideBar
             {!isLoading && !error && chats.length === 0 && <p>Чатов пока нет</p>}
 
             {chats.map((chat) => (
-                <ChatListItemView key={chat.chat_id} chat={chat}/>
+                <ChatListItemView key={chat.chat_id} chat={chat} usersById={usersById} userId={user?.id}/>
             ))}
         </aside>
     );
@@ -4534,19 +4955,75 @@ export function ChatSideBarView({chats, setChats, isLoading, error}: ChatSideBar
 ## File: messenger-frontend\src\components\MessageBubble.tsx
 
 ```
+import { useEffect, useRef, type RefObject } from "react";
 import type { Message } from "../api/types";
 
 interface MessageBubbleProps {
     message: Message;
     isOwn: boolean;
+    onVisible: (messageId: string) => void;
+    rootRef: RefObject<HTMLDivElement | null>;
+    readBy: number;
 }
 
-export function MessageBubble({ message, isOwn }: MessageBubbleProps) {
+export function MessageBubble({
+    message,
+    isOwn,
+    onVisible,
+    rootRef,
+    readBy
+}: MessageBubbleProps) {
+    const bubbleRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (isOwn) return;
+
+        const element = bubbleRef.current;
+        if (!element) return;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry.isIntersecting) {
+                    onVisible(message.id);
+                    observer.disconnect();
+                }
+            },
+            {
+                root: rootRef.current,
+                threshold: 0.5,
+            }
+        );
+
+        observer.observe(element);
+
+        return () => observer.disconnect();
+    }, [message.id, isOwn, onVisible]);
+
     return (
-        <div style={{ textAlign: isOwn ? "right" : "left", marginBottom: 15 }}>
-            <span style={{ background: "#eee", padding: "6px 10px", borderRadius: 8 }}>
-                {message.is_deleted ? "Сообщение удалено" : message.content}
+        <div
+            ref={bubbleRef}
+            style={{
+                textAlign: isOwn ? "right" : "left",
+                marginBottom: 15
+            }}
+        >
+            <span style={{
+                background: "#eee",
+                padding: "6px 10px",
+                borderRadius: 8
+            }}>
+                {message.is_deleted
+                    ? "Сообщение удалено"
+                    : message.content}
             </span>
+                {isOwn && (
+                    <span style={{
+                        color: readBy > 0 ? "#2697E8" : "#888",
+                        fontSize: 12
+                    }}>
+                        {readBy > 0 ? "✓✓" : "●"}
+                    </span>
+                )}
         </div>
     );
 }
@@ -4680,12 +5157,23 @@ export function WebSocketProvider({ chatIds, children }: { chatIds: string[]; ch
             const ws = new WebSocket(`${protocol}://${location.host}/api/v1/ws?chat_ids=${chatIdsKey}`);
             socketRef.current = ws;
 
-            ws.onmessage = (e) => {
-                const event: ChatEvent = JSON.parse(e.data);
-                handlersRef.current.forEach((handler) => handler(event));
+           ws.onopen = () => {
+                console.log("WS OPEN", chatIdsKey);
             };
 
-            ws.onclose = () => {
+            ws.onerror = (event) => {
+                console.error("WS ERROR", event);
+            };
+
+            ws.onclose = (event) => {
+                console.log("WS CLOSE", {
+                    code: event.code,
+                    reason: event.reason,
+                    wasClean: event.wasClean,
+                    chatIdsKey,
+                    closedByUs,
+                });
+
                 if (closedByUs) return;
                 retryTimer = window.setTimeout(connect, 2000);
             };
@@ -4732,14 +5220,22 @@ export function useSocket() {
 ## File: messenger-frontend\src\pages\ChatPage.tsx
 
 ```
-import { useEffect, useState, type SubmitEvent } from "react";
-import type { Message } from "../api/types";
-import { getMessages, sendMessage } from "../api/chats";
+import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
+import type { Message, MessageReadPayload } from "../api/types";
+import { getChatMembers, getMessages, markMessagesAsRead, sendMessage } from "../api/chats";
+import { getUserById } from "../api/users"
 import { useOutletContext, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { MessageBubble } from "../components/MessageBubble";
 import { useSocket } from "../context/WebSocketContext";
+import { isNewerMessage } from "../utils/chats";
 
+type ReadQueue = {
+    lastMarkedRead: string | null;
+    pendingRead: string | null;
+    isProcessing: boolean;
+    processingRead: string | null;
+};
 
 export function ChatPage() {
     const [messages, setMessages] = useState<Message[]>([]);
@@ -4749,36 +5245,266 @@ export function ChatPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [content, setContent] = useState('');
     const { chatId } = useParams();
+    const [typingUser, setTypingUser] = useState<string | null>(null);
+
+    const [visibleMessages, setVisibleMessages] = useState<Set<string>>(
+        () => new Set()
+    );
+
+    const [messagesChatId, setMessagesChatId] = useState<string | null>(null);
+    const readQueues = useRef(new Map<string, ReadQueue>());
+    const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+    const [readCursors, setReadCursors] = useState<Record<string, string>>({});
+
+    const typingTimeout = useRef<number | null>(null);
+    const lastTypingSent = useRef(0);
+    const { subscribe, send } = useSocket();
     const limit = 30
+
+    const { user } = useAuth();
+    const ordered = [...messages].reverse();
+
+    const { onMessageSent } = useOutletContext<{ onMessageSent: (msg: Message) => void }>();
+    const { onMessageRead } = useOutletContext<{ onMessageRead: (messageId: string, chatId: string) => void}>();
+
+    function getReadQueue(chatId: string): ReadQueue {
+        let queue = readQueues.current.get(chatId);
+
+        if (!queue) {
+            queue = {
+                lastMarkedRead: null,
+                pendingRead: null,
+                isProcessing: false,
+                processingRead: null,
+            };
+
+            readQueues.current.set(chatId, queue);
+        }
+
+        return queue;
+    }
+
     useEffect(() => {
+        let isCanceled = false;
+        setReadCursors({});
+        setVisibleMessages(() => new Set());
+        setMessagesChatId(null);
+        setError(null);
+        setMessages([]);
+        setIsLoading(false);
         if (!chatId) return;
+        setIsLoading(true);
         (async () => {
-            setIsLoading(true);
             try {
-                const messageList = await getMessages(chatId, limit);
-                setMessages(messageList);
+                const [messageList, membersList] = await Promise.all([
+                    getMessages(chatId, limit),
+                    getChatMembers(chatId)
+                ]);
+                if (!isCanceled){
+                    setMessagesChatId(chatId);
+                    setMessages(messageList);
+                    const cursor: Record<string, string> = membersList.reduce((acc, member) => {
+                        if (member.last_read_message_id !== null) {
+                            acc[member.user_id] = member.last_read_message_id;
+                        }
+                        return acc;
+                    }, {} as Record<string, string>);
+                    setReadCursors((prev) => {
+                        const next = { ...prev };
+                        let isChanged = false;
+                        Object.keys(cursor).forEach(key => {
+                            if (!next[key] || isNewerMessage(cursor[key], next[key])) {
+                                next[key] = cursor[key];
+                                isChanged = true;
+                            }
+                        });
+                        if(isChanged) {
+                            return next;
+                        }
+                        return prev;
+                    });
+                }
             } catch(err) {
-                console.error(err)
-                setError('Ошибка при загрузке сообщений');
+                if(!isCanceled) {
+                    console.error(err);
+                    setError('Ошибка при загрузке сообщений');
+                }
             } finally {
-                setIsLoading(false);
+                if(!isCanceled) {
+                    setIsLoading(false);
+                }
             }
 
         })();
+        return () => {
+            isCanceled = true;
+        };
 
-    }, [chatId])
-    const { subscribe } = useSocket();
-
+    }, [chatId]);
     useEffect(() => {
-        return subscribe((event) => {
-            if (event.type !== "NEW_MESSAGE" || event.chat_id !== chatId) return;
-            const msg = event.payload as Message;
-            setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [msg, ...prev]));
+        setTypingUser(null);
+        lastTypingSent.current = 0;
+
+        if (typingTimeout.current !== null) {
+            clearTimeout(typingTimeout.current);
+            typingTimeout.current = null;
+        }
+
+        const unsubscribe = subscribe((event) => {
+            if (event.chat_id !== chatId) return;
+
+            if (event.type === "NEW_MESSAGE") {
+                const msg = event.payload as Message;
+
+                setMessages((prev) =>
+                    prev.some((m) => m.id === msg.id)
+                        ? prev
+                        : [msg, ...prev]
+                );
+
+                setTypingUser(null);
+                return;
+            }
+            if (event.type === "MESSAGE_READ") {
+                const payload = event.payload as MessageReadPayload;
+
+                setReadCursors((prev) => {
+                    const currentCursor = prev[event.sender_id];
+
+                    if (
+                        currentCursor &&
+                        payload.message_id <= currentCursor
+                    ) {
+                        return prev;
+                    }
+
+                    return {
+                        ...prev,
+                        [event.sender_id]: payload.message_id,
+                    };
+                });
+
+                return;
+            }
+            (async () => {
+                if (event.type === "USER_TYPING") {
+                const user = await getUserById(event.sender_id);
+                setTypingUser(user.name);
+
+                if (typingTimeout.current !== null) {
+                    clearTimeout(typingTimeout.current);
+                }
+
+                typingTimeout.current = window.setTimeout(() => {
+                    setTypingUser(null);
+                    typingTimeout.current = null;
+                }, 3000);
+            }
+            })();
         });
+
+        return () => {
+            unsubscribe();
+
+            if (typingTimeout.current !== null) {
+                clearTimeout(typingTimeout.current);
+                typingTimeout.current = null;
+            }
+        };
     }, [chatId, subscribe]);
-    const { user } = useAuth();
-    const ordered = [...messages].reverse();
-    const { onMessageSent } = useOutletContext<{ onMessageSent: (msg: Message) => void }>();
+    async function processReadQueue(chatId: string) {
+        const queue = getReadQueue(chatId);
+
+        if (queue.isProcessing || queue.pendingRead === null) {
+            return;
+        }
+
+        if (queue.pendingRead === queue.processingRead) {
+            queue.pendingRead = null;
+            return;
+        }
+
+        queue.isProcessing = true;
+
+        let messageId = queue.pendingRead;
+
+        if (queue.processingRead) {
+            messageId = queue.processingRead;
+        } else {
+            queue.processingRead = messageId;
+            queue.pendingRead = null;
+        }
+
+        let succeeded = false;
+
+        try {
+            await markMessagesAsRead(chatId, messageId);
+
+            onMessageRead(messageId, chatId);
+            queue.lastMarkedRead = messageId;
+            queue.processingRead = null;
+            succeeded = true;
+
+        } catch (err) {
+            console.error(err);
+            setError('Ошибка при прочтении сообщения');
+
+        } finally {
+            queue.isProcessing = false;
+
+            if (succeeded && queue.pendingRead !== null) {
+                await processReadQueue(chatId);
+            }
+        }
+    }
+    useEffect(() => {
+        if (
+            !chatId ||
+            messagesChatId !== chatId ||
+            isLoading ||
+            ordered.length === 0
+        ) return;
+
+        const newestVisible = [...ordered]
+            .reverse()
+            .find((message) => visibleMessages.has(message.id));
+
+        if (!newestVisible) return;
+
+        const queue = getReadQueue(chatId);
+        const currentCursor = queue.pendingRead ?? queue.lastMarkedRead;
+
+        if (
+            currentCursor &&
+            !isNewerMessage(newestVisible.id, currentCursor)
+        ) {
+            return;
+        }
+
+        queue.pendingRead = newestVisible.id;
+        processReadQueue(chatId);
+    }, [chatId, isLoading, messages, visibleMessages, messagesChatId]);
+
+
+    function handleTyping(value: string) {
+        setContent(value);
+
+        if (!chatId || !value.trim()) return;
+
+        const now = Date.now();
+
+        if (now - lastTypingSent.current < 2000) {
+            return;
+        }
+
+        lastTypingSent.current = now;
+
+        send({
+            type: "USER_TYPING",
+            chat_id: chatId,
+            payload: {},
+        });
+    }
     async function handleSubmit(e: SubmitEvent<HTMLFormElement>) {
         e.preventDefault();
         if (!chatId) return;
@@ -4790,27 +5516,56 @@ export function ChatPage() {
         setMessages((prev) => [newMsg, ...prev]);
         onMessageSent(newMsg);
         setContent('');
+        lastTypingSent.current = 0;
         } catch (err) {
             setSendError('Что-то пошло не так, попробуй ещё раз');
         } finally {
         setIsSubmitting(false);
         }
     }
+    const handleMessageVisible = useCallback((messageId: string) => {
+        setVisibleMessages((prev) => {
+            if (prev.has(messageId)) return prev;
+
+            const next = new Set(prev);
+            next.add(messageId);
+            return next;
+        });
+    }, []);
     return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-            <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+            
+            <div ref={messagesContainerRef} style={{ flex: 1, overflowY: "auto", padding: 16, minHeight: 24 }}>
                 {isLoading && <p>Загрузка...</p>}
                 {error && <p>{error}</p>}
+                {ordered.map((m) => {
+                    const readBy = Object.entries(readCursors).filter(([userId, cursor]) => {
+                        return userId !== user?.id &&
+                            (cursor === m.id || isNewerMessage(cursor, m.id));
+                    }).length;
 
-                {ordered.map((m) => (
-                    <MessageBubble key={m.id} message={m} isOwn={m.sender_id === user?.id} />
-                ))}
+                    return (
+                        <MessageBubble
+                            key={m.id}
+                            message={m}
+                            isOwn={m.sender_id === user?.id}
+                            readBy={readBy}
+                            onVisible={handleMessageVisible}
+                            rootRef={messagesContainerRef}
+                        />
+                    );
+                })}
             </div>
+            {typingUser && (
+                <p style={{ margin: "4px 16px" }}>
+                    {typingUser} печатает...
+                </p>
+            )}
             <form onSubmit={handleSubmit}>
                 <div>
                 <label htmlFor="message-form-text">Введите сообщение...</label>
                 <input id="message-form-text" type="text" value={content}
-                        onChange={(e) => setContent(e.target.value)} required />
+                        onChange={(e) => handleTyping(e.target.value)} required />
                 </div>
 
                 {sendError && <p style={{ color: 'red' }}>{sendError}</p>}
@@ -4829,23 +5584,75 @@ export function ChatPage() {
 ## File: messenger-frontend\src\pages\ChatsPage.tsx
 
 ```
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { getChats } from "../api/chats";
 import type { ChatListItem, Message } from "../api/types";
-import { ChatListItemView } from "../components/ChatListItemView";
 import { WebSocketProvider } from "../context/WebSocketContext";
 import { ChatSideBarView } from "../components/ChatSideBar";
-import { applyMessage } from "../utils/chats";
+import { applyMessage, isNewerMessage } from "../utils/chats";
+import { getUsersByIDs } from "../api/users";
+import type { User } from "../api/types";
 
 export function ChatsPage() {
     const [chats, setChats] = useState<ChatListItem[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [usersById, setUsersById] = useState<Record<string, User>>({});
+    const requestedUserIDs = useRef(new Set<string>());
     function onMessageSent(msg: Message) {
         setChats((prev) => applyMessage(prev, msg, false));
     }
+    function onMessageRead(messageId: string, chatId: string) {
+        setChats((prev) => {
+            const chat = prev.find((c) => c.chat_id === chatId);
+            if (!chat) {return prev;}
 
+            if (chat.msg_id && !isNewerMessage(chat.msg_id, messageId)) {
+                    const updated: ChatListItem = {
+                    ...chat,
+                    unread_msg_cnt: 0,
+                };
+
+                return [updated, ...prev.filter((c) => c.chat_id !== chat.chat_id)];
+            }
+            return prev;
+        });
+    }
+    useEffect(() => {
+        const userIDs = [
+            ...new Set(
+                chats
+                    .map((chat) => chat.msg_sender_id)
+                    .filter((id): id is string => id !== null)
+            ),
+        ];
+
+        const missingIDs = userIDs.filter(
+            (id) => !requestedUserIDs.current.has(id)
+        );
+
+        if (missingIDs.length === 0) return;
+
+        missingIDs.forEach((id) => requestedUserIDs.current.add(id));
+
+        getUsersByIDs(missingIDs)
+            .then((users) => {
+                setUsersById((prev) => {
+                    const updated = { ...prev };
+
+                    users.forEach((user) => {
+                        updated[user.id] = user;
+                    });
+
+                    return updated;
+                });
+            })
+            .catch((err) => {
+                missingIDs.forEach((id) => requestedUserIDs.current.delete(id));
+                console.error("Ошибка при загрузке пользователей:", err);
+            });
+    }, [chats]);
     useEffect(() => {
         (async () => {
             setIsLoading(true);
@@ -4864,10 +5671,16 @@ export function ChatsPage() {
     return (
         <div style={{ display: "flex", height: "100vh" }}>
             <WebSocketProvider chatIds={chats.map((c) => c.chat_id)}>
-                <ChatSideBarView chats={chats} setChats={setChats} isLoading={isLoading} error={error} />
+                <ChatSideBarView
+                    chats={chats}
+                    setChats={setChats}
+                    isLoading={isLoading}
+                    error={error}
+                    usersById={usersById}
+                />
 
                 <main style={{ flex: 1 }}>
-                    <Outlet context={{ onMessageSent }} />
+                    <Outlet context={{ onMessageSent, onMessageRead }} />
                 </main>
             </WebSocketProvider>
         </div>
@@ -5027,6 +5840,9 @@ export function RegisterPage() {
 
 ```
 import type { ChatListItem, Message } from "../api/types";
+export function isNewerMessage(a: string, b: string): boolean {
+    return a > b;
+}
 
 export function applyMessage(
     prev: ChatListItem[],
@@ -5041,7 +5857,9 @@ export function applyMessage(
         msg_text: msg.content,
         msg_sent_at: msg.created_at,
         msg_updated_at: msg.updated_at,
+        msg_sender_id: msg.sender_id,
         unread_msg_cnt: existing.unread_msg_cnt + (isUnread ? 1 : 0),
+        msg_id: msg.id,
     };
 
     return [updated, ...prev.filter((c) => c.chat_id !== msg.chat_id)];
@@ -5136,7 +5954,7 @@ type EventType string
 const (
 	EventNewMessage  EventType = "NEW_MESSAGE"
 	EventUserTyping  EventType = "USER_TYPING"
-	EventMessageRead EventType = "MESSAGE-READ"
+	EventMessageRead EventType = "MESSAGE_READ"
 )
 
 type MessagePayload struct {

@@ -139,7 +139,6 @@ func (h *Hub) BroadcastToChat(chatID uuid.UUID, payload any, excludeUserID uuid.
 			targets = append(targets, client)
 		}
 	}
-	h.mu.RUnlock()
 
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -155,4 +154,5 @@ func (h *Hub) BroadcastToChat(chatID uuid.UUID, payload any, excludeUserID uuid.
 			h.Unregister(client)
 		}
 	}
+	h.mu.RUnlock()
 }

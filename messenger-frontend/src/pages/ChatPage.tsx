@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
 import type { Message, MessageReadPayload } from "../api/types";
-import { getMessages, markMessagesAsRead, sendMessage } from "../api/chats";
+import { getChatMembers, getMessages, markMessagesAsRead, sendMessage } from "../api/chats";
 import { getUserById } from "../api/users"
 import { useOutletContext, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { MessageBubble } from "../components/MessageBubble";
 import { useSocket } from "../context/WebSocketContext";
+import { isNewerMessage } from "../utils/chats";
 
-function isNewerMessage(a: string, b: string): boolean {
-    return a > b;
-}
+type ReadQueue = {
+    lastMarkedRead: string | null;
+    pendingRead: string | null;
+    isProcessing: boolean;
+    processingRead: string | null;
+};
 
 export function ChatPage() {
     const [messages, setMessages] = useState<Message[]>([]);
@@ -25,8 +29,8 @@ export function ChatPage() {
         () => new Set()
     );
 
-    const lastMarkedRead = useRef<string | null>(null);
-    const pendingRead = useRef<string | null>(null);
+    const [messagesChatId, setMessagesChatId] = useState<string | null>(null);
+    const readQueues = useRef(new Map<string, ReadQueue>());
     const messagesContainerRef = useRef<HTMLDivElement | null>(null);
     const [readCursors, setReadCursors] = useState<Record<string, string>>({});
 
@@ -34,23 +38,87 @@ export function ChatPage() {
     const lastTypingSent = useRef(0);
     const { subscribe, send } = useSocket();
     const limit = 30
+
+    const { user } = useAuth();
+    const ordered = [...messages].reverse();
+
+    const { onMessageSent } = useOutletContext<{ onMessageSent: (msg: Message) => void }>();
+    const { onMessageRead } = useOutletContext<{ onMessageRead: (messageId: string, chatId: string) => void}>();
+
+    function getReadQueue(chatId: string): ReadQueue {
+        let queue = readQueues.current.get(chatId);
+
+        if (!queue) {
+            queue = {
+                lastMarkedRead: null,
+                pendingRead: null,
+                isProcessing: false,
+                processingRead: null,
+            };
+
+            readQueues.current.set(chatId, queue);
+        }
+
+        return queue;
+    }
+
     useEffect(() => {
+        let isCanceled = false;
+        setReadCursors({});
+        setVisibleMessages(() => new Set());
+        setMessagesChatId(null);
+        setError(null);
+        setMessages([]);
+        setIsLoading(false);
         if (!chatId) return;
+        setIsLoading(true);
         (async () => {
-            setIsLoading(true);
             try {
-                const messageList = await getMessages(chatId, limit);
-                setMessages(messageList);
+                const [messageList, membersList] = await Promise.all([
+                    getMessages(chatId, limit),
+                    getChatMembers(chatId)
+                ]);
+                if (!isCanceled){
+                    setMessagesChatId(chatId);
+                    setMessages(messageList);
+                    const cursor: Record<string, string> = membersList.reduce((acc, member) => {
+                        if (member.last_read_message_id !== null) {
+                            acc[member.user_id] = member.last_read_message_id;
+                        }
+                        return acc;
+                    }, {} as Record<string, string>);
+                    setReadCursors((prev) => {
+                        const next = { ...prev };
+                        let isChanged = false;
+                        Object.keys(cursor).forEach(key => {
+                            if (!next[key] || isNewerMessage(cursor[key], next[key])) {
+                                next[key] = cursor[key];
+                                isChanged = true;
+                            }
+                        });
+                        if(isChanged) {
+                            return next;
+                        }
+                        return prev;
+                    });
+                }
             } catch(err) {
-                console.error(err)
-                setError('Ошибка при загрузке сообщений');
+                if(!isCanceled) {
+                    console.error(err);
+                    setError('Ошибка при загрузке сообщений');
+                }
             } finally {
-                setIsLoading(false);
+                if(!isCanceled) {
+                    setIsLoading(false);
+                }
             }
 
         })();
+        return () => {
+            isCanceled = true;
+        };
 
-    }, [chatId])
+    }, [chatId]);
     useEffect(() => {
         setTypingUser(null);
         lastTypingSent.current = 0;
@@ -122,11 +190,58 @@ export function ChatPage() {
             }
         };
     }, [chatId, subscribe]);
-    
-    const { user } = useAuth();
-    const ordered = [...messages].reverse();
+    async function processReadQueue(chatId: string) {
+        const queue = getReadQueue(chatId);
+
+        if (queue.isProcessing || queue.pendingRead === null) {
+            return;
+        }
+
+        if (queue.pendingRead === queue.processingRead) {
+            queue.pendingRead = null;
+            return;
+        }
+
+        queue.isProcessing = true;
+
+        let messageId = queue.pendingRead;
+
+        if (queue.processingRead) {
+            messageId = queue.processingRead;
+        } else {
+            queue.processingRead = messageId;
+            queue.pendingRead = null;
+        }
+
+        let succeeded = false;
+
+        try {
+            await markMessagesAsRead(chatId, messageId);
+
+            onMessageRead(messageId, chatId);
+            queue.lastMarkedRead = messageId;
+            queue.processingRead = null;
+            succeeded = true;
+
+        } catch (err) {
+            console.error(err);
+            setError('Ошибка при прочтении сообщения');
+
+        } finally {
+            queue.isProcessing = false;
+
+            if (succeeded && queue.pendingRead !== null) {
+                await processReadQueue(chatId);
+            }
+        }
+    }
     useEffect(() => {
-        if (!chatId || isLoading || ordered.length === 0) return;
+        if (
+            !chatId ||
+            messagesChatId !== chatId ||
+            isLoading ||
+            ordered.length === 0
+        ) return;
 
         const newestVisible = [...ordered]
             .reverse()
@@ -134,7 +249,8 @@ export function ChatPage() {
 
         if (!newestVisible) return;
 
-        const currentCursor = pendingRead.current ?? lastMarkedRead.current;
+        const queue = getReadQueue(chatId);
+        const currentCursor = queue.pendingRead ?? queue.lastMarkedRead;
 
         if (
             currentCursor &&
@@ -143,22 +259,10 @@ export function ChatPage() {
             return;
         }
 
-        pendingRead.current = newestVisible.id;
+        queue.pendingRead = newestVisible.id;
+        processReadQueue(chatId);
+    }, [chatId, isLoading, messages, visibleMessages, messagesChatId]);
 
-        markMessagesAsRead(chatId, newestVisible.id)
-            .then(() => {
-                lastMarkedRead.current = newestVisible.id;
-            })
-            .catch((err) => {
-                console.error("Не удалось обновить статус прочтения:", err);
-            })
-            .finally(() => {
-                if (pendingRead.current === newestVisible.id) {
-                    pendingRead.current = null;
-                }
-            });
-    }, [chatId, isLoading, messages, visibleMessages]);
-    const { onMessageSent } = useOutletContext<{ onMessageSent: (msg: Message) => void }>();
 
     function handleTyping(value: string) {
         setContent(value);
@@ -212,9 +316,23 @@ export function ChatPage() {
             <div ref={messagesContainerRef} style={{ flex: 1, overflowY: "auto", padding: 16, minHeight: 24 }}>
                 {isLoading && <p>Загрузка...</p>}
                 {error && <p>{error}</p>}
-                {ordered.map((m) => (
-                    <MessageBubble key={m.id} message={m} isOwn={m.sender_id === user?.id} onVisible={handleMessageVisible} rootRef={messagesContainerRef} />
-                ))}
+                {ordered.map((m) => {
+                    const readBy = Object.entries(readCursors).filter(([userId, cursor]) => {
+                        return userId !== user?.id &&
+                            (cursor === m.id || isNewerMessage(cursor, m.id));
+                    }).length;
+
+                    return (
+                        <MessageBubble
+                            key={m.id}
+                            message={m}
+                            isOwn={m.sender_id === user?.id}
+                            readBy={readBy}
+                            onVisible={handleMessageVisible}
+                            rootRef={messagesContainerRef}
+                        />
+                    );
+                })}
             </div>
             {typingUser && (
                 <p style={{ margin: "4px 16px" }}>

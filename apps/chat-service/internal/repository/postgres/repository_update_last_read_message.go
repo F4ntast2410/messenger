@@ -14,8 +14,6 @@ func (s *PostgresStorage) UpdateLastReadMessage(ctx context.Context, chatID, use
 	AND m.chat_id = $2
 	AND cm.chat_id = $2
 	AND cm.user_id = $3;`
-
-	// Используем ExecContext, так как нам не нужно сканировать возвращаемые строки
 	result, err := s.DB.ExecContext(
 		ctx,
 		query,

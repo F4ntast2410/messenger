@@ -16,6 +16,7 @@ type ChatService interface {
 	UpdateLastReadMessage(ctx context.Context, chatID, userID, messageID uuid.UUID) error
 	GetUsersChats(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
 	CheckChatType(ctx context.Context, chatID uuid.UUID) error
+	GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error)
 }
 
 type Handler struct {

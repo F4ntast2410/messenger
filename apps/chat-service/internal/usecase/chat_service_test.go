@@ -21,6 +21,7 @@ type FakeChatRepository struct {
 	GetUsersChatsFunc         func(ctx context.Context, userID uuid.UUID) ([]entity.ChatSummary, error)
 	GetChatTypeFunc           func(ctx context.Context, chatID uuid.UUID) (string, error)
 	IsDirectChatExistFunc     func(ctx context.Context, userIDs []uuid.UUID) (uuid.UUID, error)
+	GetChatMembersFunc        func(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error)
 }
 
 func (r *FakeChatRepository) GetMessagesPaginated(ctx context.Context, chatID uuid.UUID, lastSeenID *uuid.UUID, limit int) ([]entity.Message, error) {
@@ -95,4 +96,8 @@ func TestChatService_GetMessagesPaginated_Success(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (r *FakeChatRepository) GetChatMembers(ctx context.Context, chatID uuid.UUID, requestorID uuid.UUID) ([]entity.ChatMember, error) {
+	return r.GetChatMembersFunc(ctx, chatID, requestorID)
 }

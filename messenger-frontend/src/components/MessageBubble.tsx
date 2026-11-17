@@ -6,13 +6,15 @@ interface MessageBubbleProps {
     isOwn: boolean;
     onVisible: (messageId: string) => void;
     rootRef: RefObject<HTMLDivElement | null>;
+    readBy: number;
 }
 
 export function MessageBubble({
     message,
     isOwn,
     onVisible,
-    rootRef
+    rootRef,
+    readBy
 }: MessageBubbleProps) {
     const bubbleRef = useRef<HTMLDivElement | null>(null);
 
@@ -57,6 +59,14 @@ export function MessageBubble({
                     ? "Сообщение удалено"
                     : message.content}
             </span>
+                {isOwn && (
+                    <span style={{
+                        color: readBy > 0 ? "#2697E8" : "#888",
+                        fontSize: 12
+                    }}>
+                        {readBy > 0 ? "✓✓" : "●"}
+                    </span>
+                )}
         </div>
     );
 }

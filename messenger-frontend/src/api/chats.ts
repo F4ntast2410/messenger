@@ -1,5 +1,5 @@
 import { request } from "./client";
-import type { ChatListItem, Message  } from "./types";
+import type { ChatListItem, ChatMember, Message } from "./types";
 
 
 
@@ -32,4 +32,8 @@ export function markMessagesAsRead(
             message_id: messageId,
         }),
     });
+}
+
+export function getChatMembers(chatId: string): Promise<ChatMember[]>{
+    return request<ChatMember[]>(`/chats/${chatId}/members`);
 }

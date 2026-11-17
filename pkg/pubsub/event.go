@@ -11,7 +11,7 @@ type EventType string
 const (
 	EventNewMessage  EventType = "NEW_MESSAGE"
 	EventUserTyping  EventType = "USER_TYPING"
-	EventMessageRead EventType = "MESSAGE-READ"
+	EventMessageRead EventType = "MESSAGE_READ"
 )
 
 type MessagePayload struct {

@@ -86,12 +86,20 @@ func (h *Handler) writePump(client *hub.Client) {
 				return
 			}
 			if err := client.Conn().WriteMessage(websocket.TextMessage, data); err != nil {
+				slog.Error("ws write message failed",
+					slog.String("user_id", client.UserID().String()),
+					slog.String("error", err.Error()),
+				)
 				return
 			}
 
 		case <-ticker.C:
 			client.Conn().SetWriteDeadline(time.Now().Add(writeWait))
 			if err := client.Conn().WriteMessage(websocket.PingMessage, nil); err != nil {
+				slog.Error("ws ping failed",
+					slog.String("user_id", client.UserID().String()),
+					slog.String("error", err.Error()),
+				)
 				return
 			}
 		}
